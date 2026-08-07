@@ -23,7 +23,25 @@ import streamlit as st
 from dotenv import load_dotenv
 
 load_dotenv()
+def clean_journal_data(df):
+  ignore_keywords = [
+      "JALAN",
+      "KODE PERKIRAAN",
+      "KANTOR PUSAT",
+      "CABANG",
+      "KELURAHAN",
+      "KECAMATAN",
+      "JUMLAH",
+      "TOTAL",
+      "SANGGAU",
+  ]
 
+  if "Akun" in df.columns:
+    pattern = "|".join(ignore_keywords)
+    df = df[~df["Akun"].str.upper().str.contains(pattern, na=False)]
+    df = df[~df["Akun"].str.match(r"^\d{1,2}/\d{1,2}/\d{4}$", na=False)]
+
+  return df
 # ---------- Konfigurasi & konstanta ----------
 CURRENT_YEAR = datetime.now().year
 APP_TITLE = "Aplikasi Analisis Jurnal & Selisih Laporan"
