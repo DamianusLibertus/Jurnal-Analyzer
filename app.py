@@ -211,90 +211,32 @@ def pdf_to_b64_images(raw_bytes: bytes, max_pages: int = 6):
 
 
 # ---------- Ekstraksi teks langsung (TANPA AI / kuota) ----------
-# Kata kunci untuk mendeteksi baris HEADER tabel (kolom)
-HEADER_COL_KW = ("akun", "uraian", "keterangan", "perkiraan", "nama akun", "debet",
-                 "debit", "kredit", "credit", "target", "realisasi", "item", "pos",
-                 "anggaran", "nominal")
-# Kata kunci baris pengesahan / tanda tangan / penutup (footer) → hentikan pembacaan
-SIGN_KW = ("mengetahui", "menyetujui", "disetujui", "mengesahkan", "dibuat oleh",
-           "diperiksa", "disusun", "penyusun", "ketua", "wakil", "manajer", "manager",
-           "direktur", "direktris", "bendahara", "sekretaris", "kepala", "pimpinan",
-           "atasan", "nip", "nik", "tanda tangan", "ttd", "hormat kami", "stempel",
-           "materai", "pejabat", "auditor", "akuntan publik", "an.", "a.n.", "u.b.",
-           "mengesyahkan")
-# Kata kunci catatan kaki / penutup laporan
-CLOSING_KW = ("catatan:", "keterangan:", "demikian", "laporan ini", "dibuat dengan",
-              "*)", "**)", "disclaimer")
-# Kata kunci baris judul / kop dokumen
-HEADING_KW = ("halaman", "jurnal", "laporan", "periode", "page", "tanggal", "dibuat",
-              "perusahaan", "neraca", "buku besar", "hal.", "per ", "pemerintah",
-              "kementerian", "dinas", "yayasan", "koperasi", "cv ", "pt ", "ud ")
-MONTH_KW = ("januari", "februari", "maret", "april", "mei", "juni", "juli", "agustus",
-            "september", "oktober", "november", "desember", "january", "february",
-            "march", "june", "july", "august", "october", "december")
-
-
-ROW_NOISE_KW = ("total", "jumlah", "saldo akhir", "sub total", "subtotal", "grand total",
-                "mengetahui", "menyetujui", "disetujui", "mengesahkan", "dibuat oleh",
-                "diperiksa", "disusun", "penyusun", "direktur", "bendahara", "sekretaris",
-                "pimpinan", "tanda tangan", "hormat kami", "nip", "nik")
-
-
-def is_noise_label(label) -> bool:
-    """True bila label baris merupakan Total/rekap/pengesahan/kosong (bukan data akun)."""
-    low = str(label).strip().lower()
-    if low in ("", "nan", "none"):
-        return True
-    return any(k in low for k in ROW_NOISE_KW)
-
-
 def parse_text_rows(text: str, mode: str) -> pd.DataFrame:
-    """Parse teks mentah (pdfplumber/OCR) → baris akun+angka, hanya isi TABEL.
-
-    - Deteksi header tabel otomatis; baris di atasnya (kop/judul) diabaikan.
-    - Berhenti saat menemui blok pengesahan/tanda tangan/penutup (footer).
-    - Buang baris tanpa nominal angka valid.
-    """
-    lines = [ln.strip() for ln in (text or "").splitlines()]
-    num_re = re.compile(r"\(?-?[\d][\d.,]*\)?")
-
-    # 1) Cari baris HEADER tabel (≥2 kata kunci kolom) → mulai baca setelahnya
-    start = 0
-    for i, ln in enumerate(lines):
-        low = ln.lower()
-        if sum(1 for k in HEADER_COL_KW if k in low) >= 2:
-            start = i + 1
-            break
-
+    """Parse teks mentah (hasil pdfplumber/OCR) menjadi baris akun + angka secara heuristik."""
     rows = []
-    for raw_line in lines[start:]:
-        line = raw_line
+    skip_kw = ("total", "jumlah", "saldo akhir", "akun", "keterangan", "debet",
+               "kredit", "debit", "credit", "target", "realisasi", "item", "no.")
+    heading_kw = ("halaman", "jurnal", "laporan", "periode", "page", "tanggal",
+                  "dibuat", "perusahaan", "neraca", "buku besar", "hal.", "per ")
+    num_re = re.compile(r"\(?-?[\d][\d.,]*\)?")
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
         if not line:
             continue
         low = line.lower()
-
-        # 2) Blok pengesahan/tanda tangan → hentikan (footer ada di bawah)
-        if any(k in low for k in SIGN_KW) or any(k in low for k in CLOSING_KW):
-            break
-
         nums = num_re.findall(line)
+        # buang token yang hanya berupa nomor urut tunggal 1-2 digit di awal
         label = num_re.sub(" ", line).strip(" .:-\t|")
-
-        # 3) Validasi: baris tanpa label bermakna / tanpa angka → buang
         if not label or len(label) < 2:
             continue
-        if not nums:
+        # buang baris judul/heading (mis. "JURNAL UMUM - Halaman 1")
+        if any(k in low for k in heading_kw):
             continue
-        # baris judul/kop yang mungkin lolos
-        if any(k in low for k in HEADING_KW):
+        if any(k in low for k in ("total", "jumlah")) and label.lower() in ("total", "jumlah"):
             continue
-        # baris tempat+tanggal tanda tangan (mis. "Jakarta, 31 Desember 2025")
-        if any(m in low for m in MONTH_KW) and re.search(r"\b\d{4}\b", line):
+        # header row (mengandung kata kunci kolom & tanpa angka nyata)
+        if not nums and any(k in low for k in skip_kw):
             continue
-        # baris Total/Jumlah rekap → jangan dimasukkan sebagai data
-        if any(k in low for k in ("total", "jumlah", "saldo akhir")):
-            continue
-
         values = [to_num(n) for n in nums if to_num(n) != 0 or n.strip("() ") == "0"]
         if mode == "jurnal":
             debet = kredit = 0.0
@@ -533,8 +475,7 @@ def normalize_df(df: pd.DataFrame, mode: str) -> pd.DataFrame:
         out["Akun"] = df[c_akun].astype(str) if c_akun in df else ""
         out["Debet"] = df[c_deb].map(to_num) if c_deb in df else 0.0
         out["Kredit"] = df[c_kre].map(to_num) if c_kre in df else 0.0
-        out = out[~out["Akun"].map(is_noise_label)].reset_index(drop=True)
-        return out if not out.empty else pd.DataFrame([{"Akun": "", "Debet": 0.0, "Kredit": 0.0}])
+        return out.reset_index(drop=True)
     else:
         c_item = _find_col(cols, ["item", "pos", "akun", "keterangan", "uraian", "nama"])
         c_tar = _find_col(cols, ["target", "anggaran", "budget", "rencana"])
@@ -546,8 +487,7 @@ def normalize_df(df: pd.DataFrame, mode: str) -> pd.DataFrame:
         out["Item"] = df[c_item].astype(str) if c_item in df else ""
         out["Target"] = df[c_tar].map(to_num) if c_tar in df else 0.0
         out["Realisasi"] = df[c_real].map(to_num) if c_real in df else 0.0
-        out = out[~out["Item"].map(is_noise_label)].reset_index(drop=True)
-        return out if not out.empty else pd.DataFrame([{"Item": "", "Target": 0.0, "Realisasi": 0.0}])
+        return out.reset_index(drop=True)
 
 
 # ---------- Perhitungan analisis ----------
