@@ -8,7 +8,7 @@ import streamlit as st
 # 1. KONSTANTA KATA KUNCI FILTERING (NOISE)
 # ==========================================
 
-HEADER_COL_KW = ("debet", "kredit", "target", "realisasi", "akun", "item", "keterangan", "uraian")
+HEADER_COL_KW = ("debet", "debit", "kredit", "target", "realisasi", "akun", "item", "keterangan", "uraian")
 SIGN_KW = ("mengetahui", "menyetujui", "disetujui", "mengesahkan", "dibuat oleh", "diperiksa", "disusun", "direktur", "pimpinan", "tanda tangan")
 CLOSING_KW = ("catatan:", "keterangan:", "nb:", "pembukuan selesai")
 
@@ -39,7 +39,7 @@ def to_num(val) -> float:
     """Mengonversi string angka (termasuk format Indonesia/Kurung) menjadi float."""
     if isinstance(val, (int, float)):
         return float(val)
-    if not val:
+    if pd.isna(val) or not str(val).strip():
         return 0.0
     
     s = str(val).strip()
@@ -69,12 +69,34 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     return text
 
 
+def standardize_columns(df: pd.DataFrame, mode: str) -> pd.DataFrame:
+    """Menyesuaikan nama kolom otomatis agar fleksibel terhadap huruf kapital/variasi ejaan."""
+    col_map = {}
+    for col in df.columns:
+        c_low = str(col).strip().lower()
+        if mode == "jurnal":
+            if c_low in ["debet", "debit", "d"]:
+                col_map[col] = "Debet"
+            elif c_low in ["kredit", "credit", "k"]:
+                col_map[col] = "Kredit"
+            elif c_low in ["akun", "nama akun", "keterangan", "uraian"]:
+                col_map[col] = "Akun"
+        else:
+            if c_low in ["target", "anggaran", "pagu"]:
+                col_map[col] = "Target"
+            elif c_low in ["realisasi", "real", "capaian"]:
+                col_map[col] = "Realisasi"
+            elif c_low in ["item", "keterangan", "uraian", "nama item"]:
+                col_map[col] = "Item"
+    
+    return df.rename(columns=col_map)
+
+
 def parse_text_rows(text: str, mode: str) -> pd.DataFrame:
     """Merapikan teks hasil ekstraksi dan memfilter baris non-tabel/alamat/header."""
     lines = [ln.strip() for ln in (text or "").splitlines()]
     num_re = re.compile(r"\(?-?[\d][\d.,]*\)?")
 
-    # Cari titik awal tabel berdasarkan kata kunci header
     start = 0
     for i, ln in enumerate(lines):
         low = ln.lower()
@@ -90,11 +112,9 @@ def parse_text_rows(text: str, mode: str) -> pd.DataFrame:
         
         low = line.lower()
 
-        # Hentikan jika masuk area footer/tanda tangan
         if any(k in low for k in SIGN_KW) or any(k in low for k in CLOSING_KW):
             break
 
-        # Filter kata kunci non-tabel (alamat, periode, identitas)
         if any(k in low for k in EXCLUDE_KEYWORDS):
             continue
             
@@ -138,7 +158,12 @@ def parse_text_rows(text: str, mode: str) -> pd.DataFrame:
 def compute(df: pd.DataFrame, mode: str):
     """Menghitung total, selisih, dan mengidentifikasi baris yang tidak seimbang."""
     df = df.copy()
+    
     if mode == "jurnal":
+        if "Debet" not in df.columns or "Kredit" not in df.columns:
+            st.error("Kolom 'Debet' dan/atau 'Kredit' tidak ditemukan dalam data.")
+            return None, None, None
+
         df["Debet"] = df["Debet"].map(to_num)
         df["Kredit"] = df["Kredit"].map(to_num)
         df["Selisih"] = (df["Debet"] - df["Kredit"]).round(2)
@@ -155,6 +180,10 @@ def compute(df: pd.DataFrame, mode: str):
         }
         imbalanced = df[df["Selisih"].abs() > 0.001]
     else:
+        if "Target" not in df.columns or "Realisasi" not in df.columns:
+            st.error("Kolom 'Target' dan/atau 'Realisasi' tidak ditemukan dalam data.")
+            return None, None, None
+
         df["Target"] = df["Target"].map(to_num)
         df["Realisasi"] = df["Realisasi"].map(to_num)
         df["Selisih"] = (df["Realisasi"] - df["Target"]).round(2)
@@ -199,25 +228,30 @@ if uploaded_file:
         df_raw = pd.read_excel(uploaded_file)
 
     if not df_raw.empty:
-        df_processed, totals, imbalanced = compute(df_raw, mode)
+        # Standarisasi nama kolom otomatis (misal: 'Debit' -> 'Debet', 'debet' -> 'Debet')
+        df_raw = standardize_columns(df_raw, mode)
 
-        st.subheader("📌 Ringkasan Audit")
-        col1, col2, col3 = st.columns(3)
-        
-        if mode == "jurnal":
-            col1.metric("Total Debet", f"Rp {totals['total_debet']:,.2f}")
-            col2.metric("Total Kredit", f"Rp {totals['total_kredit']:,.2f}")
-            col3.metric("Status Keseimbangan", "SEIMBANG" if totals['balanced'] else "TIDAK SEIMBANG", delta=f"{totals['selisih']:,.2f}")
-        else:
-            col1.metric("Total Target", f"Rp {totals['total_target']:,.2f}")
-            col2.metric("Total Realisasi", f"Rp {totals['total_realisasi']:,.2f}")
-            col3.metric("Total Selisih", f"Rp {totals['selisih']:,.2f}")
+        res = compute(df_raw, mode)
+        if res[0] is not None:
+            df_processed, totals, imbalanced = res
 
-        st.subheader("📋 Data Hasil Ekstraksi Tabel")
-        st.dataframe(df_processed, use_container_width=True)
+            st.subheader("📌 Ringkasan Audit")
+            col1, col2, col3 = st.columns(3)
+            
+            if mode == "jurnal":
+                col1.metric("Total Debet", f"Rp {totals['total_debet']:,.2f}")
+                col2.metric("Total Kredit", f"Rp {totals['total_kredit']:,.2f}")
+                col3.metric("Status Keseimbangan", "SEIMBANG" if totals['balanced'] else "TIDAK SEIMBANG", delta=f"{totals['selisih']:,.2f}")
+            else:
+                col1.metric("Total Target", f"Rp {totals['total_target']:,.2f}")
+                col2.metric("Total Realisasi", f"Rp {totals['total_realisasi']:,.2f}")
+                col3.metric("Total Selisih", f"Rp {totals['selisih']:,.2f}")
 
-        if not imbalanced.empty:
-            st.warning(f"⚠️ Ditemukan {len(imbalanced)} baris yang memiliki selisih!")
-            st.dataframe(imbalanced, use_container_width=True)
+            st.subheader("📋 Data Hasil Ekstraksi Tabel")
+            st.dataframe(df_processed, use_container_width=True)
+
+            if not imbalanced.empty:
+                st.warning(f"⚠️ Ditemukan {len(imbalanced)} baris yang memiliki selisih!")
+                st.dataframe(imbalanced, use_container_width=True)
     else:
         st.error("Tabel tidak ditemukan atau seluruh baris terfilter sebagai data non-tabel.")
