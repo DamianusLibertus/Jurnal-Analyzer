@@ -1162,28 +1162,18 @@ def main():
         totals = res["totals"]
         st.subheader("③ Hasil Analisis & Selisih")
 if rmode == "jurnal":
-            r1c1, r1c2 = st.columns(2)
-            r1c1.metric("Total Debet", rupiah(totals.get("total_debet", 0)))
-            r1c2.metric("Total Kredit", rupiah(totals.get("total_kredit", 0)))
-            r2c1, r2c2 = st.columns(2)
-            r2c1.metric("Selisih (D-K)", rupiah(totals.get("selisih", 0)))
-            r2c2.metric("Status", "SEIMBANG ✅" if totals.get("balanced") else "TIDAK SEIMBANG ⚠️")
-            with r1c1:
-                st.markdown(card_style.format(label="Total Debet", value=rupiah(totals.get("total_debet", 0))), unsafe_allow_html=True)
-            with r1c2:
-                st.markdown(card_style.format(label="Total Kredit", value=rupiah(totals.get("total_kredit", 0))), unsafe_allow_html=True)
+        r1c1, r1c2 = st.columns(2)
+        r1c1.metric("Total Debet", rupiah(totals.get("total_debet", 0)))
+        r1c2.metric("Total Kredit", rupiah(totals.get("total_kredit", 0)))
 
-            r2c1, r2c2 = st.columns(2)
-            with r2c1:
-                st.markdown(card_style.format(label="Selisih (D-K)", value=rupiah(totals.get("selisih", 0))), unsafe_allow_html=True)
-            with r2c2:
-                status_txt = "SEIMBANG ✅" if totals.get("balanced") else "TIDAK SEIMBANG ⚠️"
-                st.markdown(card_style.format(label="Status", value=status_txt), unsafe_allow_html=True)
+        r2c1, r2c2 = st.columns(2)
+        r2c1.metric("Selisih (D-K)", rupiah(totals.get("selisih", 0)))
+        r2c2.metric("Status", "SEIMBANG ✅" if totals.get("balanced") else "TIDAK SEIMBANG ⚠️")
 
-            if not totals.get("balanced"):
-                st.error(f"⚠️ Jurnal TIDAK SEIMBANG. Selisih Debet-Kredit sebesar {rupiah(totals.get('selisih',0))}.")
-            else:
-                st.success("✅ Jurnal SEIMBANG — Total Debet = Total Kredit.")
+        if not totals.get("balanced"):
+            st.error(f"⚠️ Jurnal TIDAK SEIMBANG. Selisih Debet-Kredit sebesar {rupiah(totals.get('selisih', 0))}.")
+        else:
+            st.success("✅ Jurnal SEIMBANG — Total Debet = Total Kredit.")
         else:
             m1, m2, m3 = st.columns(3)
             m1.metric("Total Target", rupiah(totals.get("total_target", 0)))
