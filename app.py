@@ -1164,14 +1164,26 @@ def main():
         df = res["df"]
         totals = res["totals"]
         st.subheader("③ Hasil Analisis & Selisih")
-
-        if rmode == "jurnal":
+if rmode == "jurnal":
+            card_style = """
+            <div style="background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px;">
+                <div style="color: #475569 !important; font-weight: 700 !important; font-size: 13px !important; text-transform: uppercase; margin-bottom: 4px;">{label}</div>
+                <div style="color: #0f172a !important; font-weight: 800 !important; font-size: 22px !important;">{value}</div>
+            </div>
+            """
+            
             r1c1, r1c2 = st.columns(2)
-            r1c1.metric("Total Debet", rupiah(totals.get("total_debet", 0)))
-            r1c2.metric("Total Kredit", rupiah(totals.get("total_kredit", 0)))
+            with r1c1:
+                st.markdown(card_style.format(label="Total Debet", value=rupiah(totals.get("total_debet", 0))), unsafe_allow_html=True)
+            with r1c2:
+                st.markdown(card_style.format(label="Total Kredit", value=rupiah(totals.get("total_kredit", 0))), unsafe_allow_html=True)
+
             r2c1, r2c2 = st.columns(2)
-            r2c1.metric("Selisih (D-K)", rupiah(totals.get("selisih", 0)))
-            r2c2.metric("Status", "SEIMBANG ✅" if totals.get("balanced") else "TIDAK SEIMBANG ⚠️")
+            with r2c1:
+                st.markdown(card_style.format(label="Selisih (D-K)", value=rupiah(totals.get("selisih", 0))), unsafe_allow_html=True)
+            with r2c2:
+                status_txt = "SEIMBANG ✅" if totals.get("balanced") else "TIDAK SEIMBANG ⚠️"
+                st.markdown(card_style.format(label="Status", value=status_txt), unsafe_allow_html=True)
             if not totals.get("balanced"):
                 st.error(f"⚠️ Jurnal TIDAK SEIMBANG. Selisih Debet-Kredit sebesar {rupiah(totals.get('selisih',0))}.")
             else:
