@@ -813,7 +813,7 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     elements.append(Paragraph("<b>Ringkasan Eksekutif</b>", h2))
     if mode == "jurnal":
         summary_data = [
-            [Paragraph("<b>Metric</b>", th_style), Paragraph("<b>Nilai</b>", th_style)],
+            [Paragraph("<b>Indikator</b>", th_style), Paragraph("<b>Nilai</b>", th_style)],
             [Paragraph("Total Debet", td_style), Paragraph(rupiah(totals["total_debet"]), td_style)],
             [Paragraph("Total Kredit", td_style), Paragraph(rupiah(totals["total_kredit"]), td_style)],
             [Paragraph("Selisih (Debet - Kredit)", td_style), Paragraph(rupiah(totals["selisih"]), td_style)],
@@ -821,7 +821,7 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
         ]
     else:
         summary_data = [
-            [Paragraph("<b>Metric</b>", th_style), Paragraph("<b>Nilai</b>", th_style)],
+            [Paragraph("<b>Indikator</b>", th_style), Paragraph("<b>Nilai</b>", th_style)],
             [Paragraph("Total Target", td_style), Paragraph(rupiah(totals["total_target"]), td_style)],
             [Paragraph("Total Realisasi", td_style), Paragraph(rupiah(totals["total_realisasi"]), td_style)],
             [Paragraph("Selisih (Realisasi - Target)", td_style), Paragraph(rupiah(totals["selisih"]), td_style)],
@@ -909,7 +909,6 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
 
     # Penjelasan & Catatan Analisis Audit
     if explanation:
-        # Jika teks bawaan 'EMERGENT_LLM_KEY belum diset', ganti dengan pesan resmi
         if "EMERGENT_LLM_KEY" in explanation or "Analisis AI tidak tersedia" in explanation:
             clean_exp = "Catatan Audit: Laporan diekspor secara otomatis berdasarkan data transaksi yang diinput. Harap lakukan penyesuaian/jurnal koreksi pada akun yang ditandai merah."
         else:
@@ -923,6 +922,7 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
 
     doc.build(elements)
     return buf.getvalue()
+
 
 # ---------- STYLING ----------
 def inject_css():
