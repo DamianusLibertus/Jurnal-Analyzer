@@ -875,7 +875,7 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
         box_border = colors.HexColor("#CBD5E1")
         formatted_html = (
             "<b>Catatan Sistem:</b><br/>"
-            "Modul Analisis Otomatis AI tidak aktif. "
+            "Modul Analisis Otomatis tidak aktif. "
             "Hasil rekapitulasi saldo dan kalkulasi selisih pada tabel di atas dihitung secara akurat dan presisi berdasarkan data transaksi."
         )
     else:
