@@ -784,19 +784,22 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     doc = SimpleDocTemplate(
         buf,
         pagesize=A4,
-        topMargin=18 * mm,
-        bottomMargin=18 * mm,
-        leftMargin=15 * mm,
-        rightMargin=15 * mm,
+        topMargin=15 * mm,
+        bottomMargin=15 * mm,
+        leftMargin=12 * mm,
+        rightMargin=12 * mm,
     )
     ss = getSampleStyleSheet()
     navy = colors.HexColor("#1E3A5F")
-    gold = colors.HexColor("#B8860B")
     
-    title_style = ParagraphStyle("TitleStyle", parent=ss["Title"], textColor=navy, fontSize=16, leading=20, alignment=0)
-    h2 = ParagraphStyle("Heading2Style", parent=ss["Heading2"], textColor=navy, fontSize=12, leading=16, spaceBefore=10, spaceAfter=4)
+    title_style = ParagraphStyle("TitleStyle", parent=ss["Title"], textColor=navy, fontSize=15, leading=18, alignment=0)
+    h2 = ParagraphStyle("Heading2Style", parent=ss["Heading2"], textColor=navy, fontSize=11, leading=15, spaceBefore=8, spaceAfter=4)
     small = ParagraphStyle("SmallStyle", parent=ss["Normal"], fontSize=8, leading=10, textColor=colors.grey)
-    body = ParagraphStyle("BodyStyle", parent=ss["Normal"], fontSize=9, leading=13, textColor=colors.HexColor("#1E293B"))
+    body = ParagraphStyle("BodyStyle", parent=ss["Normal"], fontSize=8.5, leading=12, textColor=colors.HexColor("#1E293B"))
+    
+    # Style khusus untuk sel tabel agar teks melipat rapi
+    th_style = ParagraphStyle("THStyle", parent=ss["Normal"], fontSize=8, leading=10, textColor=colors.white, fontName="Helvetica-Bold")
+    td_style = ParagraphStyle("TDStyle", parent=ss["Normal"], fontSize=7.5, leading=9.5, textColor=colors.HexColor("#1E293B"))
 
     elements = []
 
@@ -804,66 +807,77 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     elements.append(Paragraph(f"<b>{APP_TITLE}</b>", title_style))
     elements.append(Paragraph(f"Hak Cipta © {CURRENT_YEAR} {OWNER}. Seluruh Hak Cipta Dilindungi.", small))
     elements.append(Paragraph(f"<i>Tanggal Cetak: {datetime.now().strftime('%d-%m-%Y %H:%M WIB')}</i>", small))
-    elements.append(Spacer(1, 10))
+    elements.append(Spacer(1, 8))
 
     # Ringkasan Eksekutif
     elements.append(Paragraph("<b>Ringkasan Eksekutif</b>", h2))
     if mode == "jurnal":
         summary_data = [
-            ["Metric", "Nilai"],
-            ["Total Debet", rupiah(totals["total_debet"])],
-            ["Total Kredit", rupiah(totals["total_kredit"])],
-            ["Selisih (Debet - Kredit)", rupiah(totals["selisih"])],
-            ["Status", "SEIMBANG" if totals["balanced"] else "TIDAK SEIMBANG"],
+            [Paragraph("<b>Metric</b>", th_style), Paragraph("<b>Nilai</b>", th_style)],
+            [Paragraph("Total Debet", td_style), Paragraph(rupiah(totals["total_debet"]), td_style)],
+            [Paragraph("Total Kredit", td_style), Paragraph(rupiah(totals["total_kredit"]), td_style)],
+            [Paragraph("Selisih (Debet - Kredit)", td_style), Paragraph(rupiah(totals["selisih"]), td_style)],
+            [Paragraph("Status", td_style), Paragraph("<b>SEIMBANG</b>" if totals["balanced"] else "<font color='red'><b>TIDAK SEIMBANG</b></font>", td_style)],
         ]
     else:
         summary_data = [
-            ["Metric", "Nilai"],
-            ["Total Target", rupiah(totals["total_target"])],
-            ["Total Realisasi", rupiah(totals["total_realisasi"])],
-            ["Selisih (Realisasi - Target)", rupiah(totals["selisih"])],
-            ["Status", "SESUAI" if totals["balanced"] else "DEVIASI"],
+            [Paragraph("<b>Metric</b>", th_style), Paragraph("<b>Nilai</b>", th_style)],
+            [Paragraph("Total Target", td_style), Paragraph(rupiah(totals["total_target"]), td_style)],
+            [Paragraph("Total Realisasi", td_style), Paragraph(rupiah(totals["total_realisasi"]), td_style)],
+            [Paragraph("Selisih (Realisasi - Target)", td_style), Paragraph(rupiah(totals["selisih"]), td_style)],
+            [Paragraph("Status", td_style), Paragraph("<b>SESUAI</b>" if totals["balanced"] else "<font color='red'><b>DEVIASI</b></font>", td_style)],
         ]
 
-    t_summary = Table(summary_data, colWidths=[110 * mm, 60 * mm])
+    t_summary = Table(summary_data, colWidths=[110 * mm, 70 * mm])
     t_summary.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), navy),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
     ]))
     elements.append(t_summary)
-    elements.append(Spacer(1, 12))
+    elements.append(Spacer(1, 10))
 
-    # Tabel Detail
+    # Tabel Detail dengan pembagian lebar kolom proporsional
     elements.append(Paragraph("<b>Rincian Data Analisis</b>", h2))
     headers = list(df.columns)
-    table_rows = [headers]
+    
+    # Buat header bertipe Paragraph
+    header_row = [Paragraph(f"<b>{h}</b>", th_style) for h in headers]
+    table_rows = [header_row]
+    
     for _, row in df.iterrows():
         r_list = []
         for col in headers:
             val = row[col]
             if isinstance(val, (int, float)) and col != "% Deviasi":
-                r_list.append(rupiah(val))
+                txt = rupiah(val)
             else:
-                r_list.append(str(val))
+                txt = str(val)
+            r_list.append(Paragraph(txt, td_style))
         table_rows.append(r_list)
 
-    col_w = (170 * mm) / len(headers)
-    t_detail = Table(table_rows, colWidths=[col_w] * len(headers))
+    # Pengaturan lebar kolom presisi (A4 print area = 186mm)
+    if len(headers) == 4:
+        col_widths = [84 * mm, 34 * mm, 34 * mm, 34 * mm] # Kolom Akun/Item 84mm
+    elif len(headers) == 3:
+        col_widths = [96 * mm, 45 * mm, 45 * mm]
+    else:
+        col_widths = [(186 * mm) / len(headers)] * len(headers)
+
+    t_detail = Table(table_rows, colWidths=col_widths, repeatRows=1)
     t_detail.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#F1F5F9")),
-        ('TEXTCOLOR', (0, 0), (-1, 0), navy),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 8),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+        ('BACKGROUND', (0, 0), (-1, 0), navy),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
     ]))
     elements.append(t_detail)
-    elements.append(Spacer(1, 12))
+    elements.append(Spacer(1, 10))
 
     # Analisis Audit
     if explanation:
@@ -872,7 +886,7 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
         for line in clean_exp.split("\n"):
             if line.strip():
                 elements.append(Paragraph(line.strip(), body))
-                elements.append(Spacer(1, 3))
+                elements.append(Spacer(1, 2))
 
     doc.build(elements)
     return buf.getvalue()
