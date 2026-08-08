@@ -778,132 +778,103 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.units import mm
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    )
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
     buf = BytesIO()
     doc = SimpleDocTemplate(
-        buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm,
-        leftMargin=15 * mm, rightMargin=15 * mm,
+        buf,
+        pagesize=A4,
+        topMargin=18 * mm,
+        bottomMargin=18 * mm,
+        leftMargin=15 * mm,
+        rightMargin=15 * mm,
     )
     ss = getSampleStyleSheet()
     navy = colors.HexColor("#1E3A5F")
     gold = colors.HexColor("#B8860B")
-    title_style = ParagraphStyle("t", parent=ss["Title"], textColor=navy, fontSize=17)
-    h2 = ParagraphStyle("h2", parent=ss["Heading2"], textColor=navy, spaceBefore=10)
-    small = ParagraphStyle("small", parent=ss["Normal"], fontSize=8, textColor=colors.grey)
-    body = ParagraphStyle("body", parent=ss["Normal"], fontSize=9.5, leading=14)
+    
+    title_style = ParagraphStyle("TitleStyle", parent=ss["Title"], textColor=navy, fontSize=16, leading=20, alignment=0)
+    h2 = ParagraphStyle("Heading2Style", parent=ss["Heading2"], textColor=navy, fontSize=12, leading=16, spaceBefore=10, spaceAfter=4)
+    small = ParagraphStyle("SmallStyle", parent=ss["Normal"], fontSize=8, leading=10, textColor=colors.grey)
+    body = ParagraphStyle("BodyStyle", parent=ss["Normal"], fontSize=9, leading=13, textColor=colors.HexColor("#1E293B"))
 
-    story = []
-    story.append(Paragraph(APP_TITLE, title_style))
-    story.append(Paragraph(f"© {CURRENT_YEAR} {OWNER}. All Rights Reserved.", small))
-    story.append(Paragraph(
-        f"Tanggal cetak: {datetime.now().strftime('%d %B %Y, %H:%M')} WIB", small))
-    story.append(Spacer(1, 8))
+    elements = []
 
-    # Ringkasan saldo
+    # Kop Laporan
+    elements.append(Paragraph(f"<b>{APP_TITLE}</b>", title_style))
+    elements.append(Paragraph(f"Hak Cipta © {CURRENT_YEAR} {OWNER}. Seluruh Hak Cipta Dilindungi.", small))
+    elements.append(Paragraph(f"<i>Tanggal Cetak: {datetime.now().strftime('%d-%m-%Y %H:%M WIB')}</i>", small))
+    elements.append(Spacer(1, 10))
+
+    # Ringkasan Eksekutif
+    elements.append(Paragraph("<b>Ringkasan Eksekutif</b>", h2))
     if mode == "jurnal":
-        summary = [
+        summary_data = [
+            ["Metric", "Nilai"],
             ["Total Debet", rupiah(totals["total_debet"])],
             ["Total Kredit", rupiah(totals["total_kredit"])],
-            ["Selisih (D-K)", rupiah(totals["selisih"])],
+            ["Selisih (Debet - Kredit)", rupiah(totals["selisih"])],
             ["Status", "SEIMBANG" if totals["balanced"] else "TIDAK SEIMBANG"],
         ]
     else:
-        summary = [
+        summary_data = [
+            ["Metric", "Nilai"],
             ["Total Target", rupiah(totals["total_target"])],
             ["Total Realisasi", rupiah(totals["total_realisasi"])],
-            ["Selisih (R-T)", rupiah(totals["selisih"])],
+            ["Selisih (Realisasi - Target)", rupiah(totals["selisih"])],
+            ["Status", "SESUAI" if totals["balanced"] else "DEVIASI"],
         ]
-    story.append(Paragraph("Ringkasan Saldo", h2))
-    st_tbl = Table(summary, colWidths=[70 * mm, 100 * mm])
-    st_tbl.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#EEF2F7")),
-        ("TEXTCOLOR", (0, 0), (0, -1), navy),
-        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-        ("FONTSIZE", (0, 0), (-1, -1), 9.5),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-    ]))
-    story.append(st_tbl)
-    story.append(Spacer(1, 10))
 
-    # Tabel data dengan penanda warna
-    story.append(Paragraph("Tabel Data & Selisih", h2))
+    t_summary = Table(summary_data, colWidths=[110 * mm, 60 * mm])
+    t_summary.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), navy),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+    ]))
+    elements.append(t_summary)
+    elements.append(Spacer(1, 12))
+
+    # Tabel Detail
+    elements.append(Paragraph("<b>Rincian Data Analisis</b>", h2))
     headers = list(df.columns)
-    data = [headers] + df.astype(object).values.tolist()
-    # format angka
-    numeric_cols = [c for c in headers if c not in ("Akun", "Item")]
-    for r in range(1, len(data)):
-        for ci, c in enumerate(headers):
-            if c in numeric_cols:
-                try:
-                    data[r][ci] = f"{float(data[r][ci]):,.2f}"
-                except Exception:
-                    pass
-    tbl = Table(data, repeatRows=1)
-    style = [
-        ("BACKGROUND", (0, 0), (-1, 0), navy),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#CBD5E1")),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-    ]
-    if "Selisih" in headers:
-        sidx = headers.index("Selisih")
-        for r in range(1, len(data)):
-            try:
-                val = float(str(data[r][sidx]).replace(",", ""))
-            except Exception:
-                val = 0.0
-            if abs(val) > 0.001:
-                style.append(("BACKGROUND", (0, r), (-1, r), colors.HexColor("#FDE2E1")))
-                style.append(("TEXTCOLOR", (sidx, r), (sidx, r), colors.HexColor("#B91C1C")))
-    tbl.setStyle(TableStyle(style))
-    story.append(tbl)
-    story.append(Spacer(1, 12))
+    table_rows = [headers]
+    for _, row in df.iterrows():
+        r_list = []
+        for col in headers:
+            val = row[col]
+            if isinstance(val, (int, float)) and col != "% Deviasi":
+                r_list.append(rupiah(val))
+            else:
+                r_list.append(str(val))
+        table_rows.append(r_list)
 
-   # Penjelasan & Analisis Audit (Tampilan Cantik Berbentuk Callout Box)
-    story.append(Paragraph("<b>Penjelasan & Analisis Audit</b>", h2))
-    story.append(Spacer(1, 4))
-
-    clean_text = explanation.strip() if explanation else ""
-    if not clean_text or "tidak tersedia" in clean_text.lower() or "kuota" in clean_text.lower():
-        box_bg = colors.HexColor("#F8FAFC")
-        box_border = colors.HexColor("#CBD5E1")
-        formatted_html = (
-            "<b>Catatan Sistem:</b><br/>"
-            "Modul Analisis Otomatis tidak aktif. "
-            "Hasil rekapitulasi saldo dan kalkulasi selisih pada tabel di atas dihitung secara akurat dan presisi berdasarkan data transaksi."
-        )
-    else:
-        box_bg = colors.HexColor("#F0F9FF")
-        box_border = colors.HexColor("#BAE6FD")
-        txt = clean_text.replace("\n", "<br/>")
-        txt = re.sub(r"###\s*(.*?)(?:<br/>|$)", r"<b><font color='#1E3A5F'>\1</font></b><br/>", txt)
-        txt = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", txt)
-        txt = txt.replace("_", "")
-        formatted_html = txt
-
-    analysis_table = Table(
-        [[Paragraph(formatted_html, body)]],
-        colWidths=[170 * mm]
-    )
-    analysis_table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,-1), box_bg),
-        ('BOX', (0,0), (-1,-1), 1, box_border),
-        ('PADDING', (0,0), (-1,-1), 8),
-        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+    col_w = (170 * mm) / len(headers)
+    t_detail = Table(table_rows, colWidths=[col_w] * len(headers))
+    t_detail.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#F1F5F9")),
+        ('TEXTCOLOR', (0, 0), (-1, 0), navy),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
     ]))
-    story.append(analysis_table)
-    story.append(Spacer(1, 16))
-    story.append(Paragraph(
-        f"<i>Dokumen ini dihasilkan otomatis. © {CURRENT_YEAR} {OWNER}. All Rights Reserved.</i>",
-        small))
+    elements.append(t_detail)
+    elements.append(Spacer(1, 12))
 
-    doc.build(story)
+    # Analisis Audit
+    if explanation:
+        elements.append(Paragraph("<b>Penjelasan & Analisis Audit AI</b>", h2))
+        clean_exp = explanation.replace("#", "").replace("*", "")
+        for line in clean_exp.split("\n"):
+            if line.strip():
+                elements.append(Paragraph(line.strip(), body))
+                elements.append(Spacer(1, 3))
+
+    doc.build(elements)
     return buf.getvalue()
 
 
