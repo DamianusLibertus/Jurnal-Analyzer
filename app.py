@@ -39,7 +39,29 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
+t.markdown("""
+    <style>
+    /* Paksa warna teks label dan nilai pada st.metric agar terlihat kontras & jelas */
+    div[data-testid="stMetricValue"] {
+        color: #0f172a !important;
+        font-weight: bold !important;
+        background-color: #ffffff !important;
+        padding: 4px 8px !important;
+        border-radius: 4px !important;
+    }
+    div[data-testid="stMetricLabel"] {
+        color: #334155 !important;
+        font-weight: 600 !important;
+    }
+    div[data-testid="stMetric"] {
+        background-color: #ffffff !important;
+        padding: 12px !important;
+        border-radius: 8px !important;
+        border: 1px solid #cbd5e1 !important;
+        box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.05) !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # ---------- MongoDB (history) ----------
 @st.cache_resource(show_spinner=False)
