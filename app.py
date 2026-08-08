@@ -829,38 +829,60 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     story.append(st_tbl)
     story.append(Spacer(1, 10))
 
-    # Tabel data dengan penanda warna
+   # Tabel data dengan penanda warna (Perbaikan Otomatis Kolom Kepotong)
     story.append(Paragraph("Tabel Data & Selisih", h2))
     headers = list(df.columns)
-    data = [headers] + df.astype(object).values.tolist()
-    # format angka
-    numeric_cols = [c for c in headers if c not in ("Akun", "Item")]
-    for r in range(1, len(data)):
-        for ci, c in enumerate(headers):
+    
+    # Menentukan lebar kolom otomatis berdasarkan lebar area cetak A4 (180mm)
+    num_cols = len(headers)
+    if num_cols == 5:
+        col_widths = [15 * mm, 60 * mm, 35 * mm, 35 * mm, 35 * mm]
+    elif num_cols == 4:
+        col_widths = [75 * mm, 35 * mm, 35 * mm, 35 * mm]
+    else:
+        col_widths = [180 * mm / num_cols] * num_cols
+
+    # Membungkus teks tabel dengan Paragraph agar otomatis pindah baris jika panjang
+    data = []
+    # Header
+    header_row = [Paragraph(f"<b>{c}</b>", ParagraphStyle("th", parent=ss["Normal"], textColor=colors.white, fontSize=8, alignment=1)) for c in headers]
+    data.append(header_row)
+
+    # Isi Data
+    numeric_cols = [c for c in headers if c not in ("Akun", "Item", "Keterangan", "No")]
+    for _, row in df.iterrows():
+        row_data = []
+        for c in headers:
+            val = row[c]
             if c in numeric_cols:
                 try:
-                    data[r][ci] = f"{float(data[r][ci]):,.2f}"
+                    val_str = f"{float(val):,.2f}"
                 except Exception:
-                    pass
-    tbl = Table(data, repeatRows=1)
+                    val_str = str(val)
+                cell_style = ParagraphStyle("td_num", parent=ss["Normal"], fontSize=8, alignment=2) # Rata kanan
+            else:
+                val_str = str(val)
+                cell_style = ParagraphStyle("td_text", parent=ss["Normal"], fontSize=8, leading=10) # Rata kiri + lipat teks
+            row_data.append(Paragraph(val_str, cell_style))
+        data.append(row_data)
+
+    tbl = Table(data, colWidths=col_widths, repeatRows=1)
     style = [
         ("BACKGROUND", (0, 0), (-1, 0), navy),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#CBD5E1")),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
     ]
+
     if "Selisih" in headers:
-        sidx = headers.index("Selisih")
         for r in range(1, len(data)):
             try:
-                val = float(str(data[r][sidx]).replace(",", ""))
+                val_check = float(df.iloc[r-1]["Selisih"])
             except Exception:
-                val = 0.0
-            if abs(val) > 0.001:
+                val_check = 0.0
+            if abs(val_check) > 0.001:
                 style.append(("BACKGROUND", (0, r), (-1, r), colors.HexColor("#FDE2E1")))
-                style.append(("TEXTCOLOR", (sidx, r), (sidx, r), colors.HexColor("#B91C1C")))
+
     tbl.setStyle(TableStyle(style))
     story.append(tbl)
     story.append(Spacer(1, 12))
