@@ -1192,7 +1192,8 @@ def main():
         st.dataframe(styled, use_container_width=True)
 
         st.subheader("④ Catatan & Ringkasan Audit")
-    st.info("💡 Laporan dianalisis secara otomatis berdasarkan data transaksi. Harap periksa akun yang ditandai merah pada tabel di atas untuk melakukan penyesuaian jurnal.")
+        st.info("💡 Laporan dianalisis secara otomatis berdasarkan data transaksi. Harap periksa akun yang ditandai merah pada tabel di atas untuk melakukan penyesuaian jurnal.")
+
         # ===== Ekspor =====
         st.subheader("⑤ Ekspor & Cetak Laporan")
         e1, e2, e3 = st.columns(3)
