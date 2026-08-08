@@ -769,10 +769,6 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
-def to_csv_bytes(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8-sig")
-
-
 def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
@@ -799,6 +795,7 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     
     th_style = ParagraphStyle("THStyle", parent=ss["Normal"], fontSize=8, leading=10, textColor=colors.white, fontName="Helvetica-Bold")
     td_style = ParagraphStyle("TDStyle", parent=ss["Normal"], fontSize=7.5, leading=9.5, textColor=colors.HexColor("#1E293B"))
+    td_red_style = ParagraphStyle("TDRedStyle", parent=ss["Normal"], fontSize=7.5, leading=9.5, textColor=colors.HexColor("#DC2626"), fontName="Helvetica-Bold")
 
     elements = []
 
@@ -838,7 +835,27 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     elements.append(t_summary)
     elements.append(Spacer(1, 10))
 
-    # Tabel Detail
+    # Deteksi Pasangan Jurnal Berpasangan (Per Dua Baris) Yang Selisih
+    bad_rows_indices = set()
+    n_rows = len(df)
+    
+    # Cek transaksi berpasangan (pasangan baris 0&1, 2&3, 4&5, dst)
+    for i in range(0, n_rows, 2):
+        if i + 1 < n_rows:
+            d_val1 = float(df.iloc[i].get("Debet", 0) or 0)
+            k_val1 = float(df.iloc[i].get("Kredit", 0) or 0)
+            d_val2 = float(df.iloc[i+1].get("Debet", 0) or 0)
+            k_val2 = float(df.iloc[i+1].get("Kredit", 0) or 0)
+            
+            # Pasangan jurnal seimbang jika (Debet1 + Debet2) == (Kredit1 + Kredit2)
+            if abs((d_val1 + d_val2) - (k_val1 + k_val2)) > 0.01:
+                bad_rows_indices.add(i + 1)     # Baris pertama pasangan
+                bad_rows_indices.add(i + 2)     # Baris kedua pasangan
+        else:
+            # Jika ada baris ganjil di paling akhir tanpa pasangan
+            bad_rows_indices.add(i + 1)
+
+    # Tabel Rincian Data Analisis
     elements.append(Paragraph("<b>Rincian Data Analisis</b>", h2))
     headers = list(df.columns)
     
@@ -847,9 +864,7 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     
     for idx, row in df.iterrows():
         r_list = []
-        is_highlight = False
-        if "Status" in row and str(row["Status"]).upper() in ["SELISIH", "TIDAK SEIMBANG", "DEVIASI"]:
-            is_highlight = True
+        is_bad = (idx + 1) in bad_rows_indices
 
         for col in headers:
             val = row[col]
@@ -858,12 +873,11 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
             else:
                 txt = str(val)
 
-            if is_highlight:
-                formatted_txt = f"<font color='#DC2626'><b>{txt}</b></font>"
+            # Jika baris bermasalah pakai warna merah, jika seimbang pakai hitam biasa
+            if is_bad:
+                r_list.append(Paragraph(txt, td_red_style))
             else:
-                formatted_txt = txt
-
-            r_list.append(Paragraph(formatted_txt, td_style))
+                r_list.append(Paragraph(txt, td_style))
         
         table_rows.append(r_list)
 
@@ -886,9 +900,9 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
     ]
 
-    for i, row in enumerate(df.itertuples(), start=1):
-        if hasattr(row, 'Status') and str(getattr(row, 'Status')).upper() in ["SELISIH", "TIDAK SEIMBANG", "DEVIASI"]:
-            t_styles.append(('BACKGROUND', (0, i), (-1, i), colors.HexColor("#FEE2E2")))
+    # Hanya beri latar belakang merah muda pada baris transaksi yang selisih
+    for r_idx in bad_rows_indices:
+        t_styles.append(('BACKGROUND', (0, r_idx), (-1, r_idx), colors.HexColor("#FEE2E2")))
 
     t_detail.setStyle(TableStyle(t_styles))
     elements.append(t_detail)
