@@ -39,8 +39,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-st.markdown(
-    """
+st.markdown("""
 <style>
 /* Mengatur latar belakang kartu metric */
 div[data-testid="stMetric"] {
@@ -50,11 +49,11 @@ div[data-testid="stMetric"] {
     border: 1px solid #cbd5e1 !important;
 }
 
-/* Memaksa teks judul (LABEL) metric berwarna gelap dan tebal */
+/* Memaksa teks judul (LABEL) metric berwarna hitam pekat */
 div[data-testid="stMetricLabel"] *, 
 div[data-testid="stMetricLabel"] label,
 div[data-testid="stMetricLabel"] p {
-    color: #1e293b !important;
+    color: #0f172a !important;
     font-weight: 700 !important;
     font-size: 14px !important;
 }
@@ -66,9 +65,7 @@ div[data-testid="stMetricValue"] div {
     font-weight: bold !important;
 }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
 # ---------- MongoDB (history) ----------
 @st.cache_resource(show_spinner=False)
