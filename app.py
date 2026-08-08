@@ -1171,7 +1171,6 @@ if rmode == "jurnal":
                 <div style="color: #0f172a !important; font-weight: 800 !important; font-size: 22px !important;">{value}</div>
             </div>
             """
-            
             r1c1, r1c2 = st.columns(2)
             with r1c1:
                 st.markdown(card_style.format(label="Total Debet", value=rupiah(totals.get("total_debet", 0))), unsafe_allow_html=True)
@@ -1184,6 +1183,7 @@ if rmode == "jurnal":
             with r2c2:
                 status_txt = "SEIMBANG ✅" if totals.get("balanced") else "TIDAK SEIMBANG ⚠️"
                 st.markdown(card_style.format(label="Status", value=status_txt), unsafe_allow_html=True)
+
             if not totals.get("balanced"):
                 st.error(f"⚠️ Jurnal TIDAK SEIMBANG. Selisih Debet-Kredit sebesar {rupiah(totals.get('selisih',0))}.")
             else:
