@@ -929,6 +929,8 @@ def inject_css():
     st.markdown(
         """
         <style>
+        [data-testid="stMetricLabel"] { color: #1E293B !important; font-weight: 700 !important; }
+        [data-testid="stMetricValue"] { color: #0F172A !important; font-weight: 800 !important; }
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap');
         html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
         h1, h2, h3, .app-brand { font-family: 'Fraunces', serif !important; }
