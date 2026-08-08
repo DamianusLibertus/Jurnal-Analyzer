@@ -769,6 +769,14 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
+def to_csv_bytes(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=False).encode("utf-8-sig")
+
+
+def to_csv_bytes(df) -> bytes:
+    return df.to_csv(index=False).encode("utf-8")
+
+
 def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
@@ -839,7 +847,6 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     bad_rows_indices = set()
     n_rows = len(df)
     
-    # Cek transaksi berpasangan (pasangan baris 0&1, 2&3, 4&5, dst)
     for i in range(0, n_rows, 2):
         if i + 1 < n_rows:
             d_val1 = float(df.iloc[i].get("Debet", 0) or 0)
@@ -847,12 +854,10 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
             d_val2 = float(df.iloc[i+1].get("Debet", 0) or 0)
             k_val2 = float(df.iloc[i+1].get("Kredit", 0) or 0)
             
-            # Pasangan jurnal seimbang jika (Debet1 + Debet2) == (Kredit1 + Kredit2)
             if abs((d_val1 + d_val2) - (k_val1 + k_val2)) > 0.01:
-                bad_rows_indices.add(i + 1)     # Baris pertama pasangan
-                bad_rows_indices.add(i + 2)     # Baris kedua pasangan
+                bad_rows_indices.add(i + 1)
+                bad_rows_indices.add(i + 2)
         else:
-            # Jika ada baris ganjil di paling akhir tanpa pasangan
             bad_rows_indices.add(i + 1)
 
     # Tabel Rincian Data Analisis
@@ -873,7 +878,6 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
             else:
                 txt = str(val)
 
-            # Jika baris bermasalah pakai warna merah, jika seimbang pakai hitam biasa
             if is_bad:
                 r_list.append(Paragraph(txt, td_red_style))
             else:
@@ -900,7 +904,6 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
     ]
 
-    # Hanya beri latar belakang merah muda pada baris transaksi yang selisih
     for r_idx in bad_rows_indices:
         t_styles.append(('BACKGROUND', (0, r_idx), (-1, r_idx), colors.HexColor("#FEE2E2")))
 
