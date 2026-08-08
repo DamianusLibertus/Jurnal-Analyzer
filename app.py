@@ -1222,6 +1222,7 @@ def main():
             except Exception as e:
                 st.error(f"Gagal membuat PDF: {e}")
 # Pemanggilan Fungsi Audit Selisih
+    if 'df' in locals() and df is not None:
     cari_titik_selisih_otomatis(df)
 
 
