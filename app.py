@@ -797,7 +797,7 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     small = ParagraphStyle("SmallStyle", parent=ss["Normal"], fontSize=8, leading=10, textColor=colors.grey)
     body = ParagraphStyle("BodyStyle", parent=ss["Normal"], fontSize=8.5, leading=12, textColor=colors.HexColor("#1E293B"))
     
-    # Style khusus untuk sel tabel agar teks melipat rapi
+    # Style khusus untuk sel tabel
     th_style = ParagraphStyle("THStyle", parent=ss["Normal"], fontSize=8, leading=10, textColor=colors.white, fontName="Helvetica-Bold")
     td_style = ParagraphStyle("TDStyle", parent=ss["Normal"], fontSize=7.5, leading=9.5, textColor=colors.HexColor("#1E293B"))
 
@@ -839,43 +839,62 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     elements.append(t_summary)
     elements.append(Spacer(1, 10))
 
-    # Tabel Detail dengan pembagian lebar kolom proporsional
+    # Tabel Detail dengan Highlight Warna Merah/Pink pada Akun Selisih
     elements.append(Paragraph("<b>Rincian Data Analisis</b>", h2))
     headers = list(df.columns)
     
-    # Buat header bertipe Paragraph
     header_row = [Paragraph(f"<b>{h}</b>", th_style) for h in headers]
     table_rows = [header_row]
     
-    for _, row in df.iterrows():
+    for idx, row in df.iterrows():
         r_list = []
+        is_selisih = False
+        if "Selisih" in row and row["Selisih"] != 0:
+            is_selisih = True
+
         for col in headers:
             val = row[col]
             if isinstance(val, (int, float)) and col != "% Deviasi":
                 txt = rupiah(val)
             else:
                 txt = str(val)
-            r_list.append(Paragraph(txt, td_style))
+
+            # Jika baris selisih, buat teks berwarna MERAH tebal
+            if is_selisih:
+                formatted_txt = f"<font color='#DC2626'><b>{txt}</b></font>"
+            else:
+                formatted_txt = txt
+
+            r_list.append(Paragraph(formatted_txt, td_style))
+        
         table_rows.append(r_list)
 
-    # Pengaturan lebar kolom presisi (A4 print area = 186mm)
+    # Pengaturan lebar kolom proporsional (area cetak = 186mm)
     if len(headers) == 4:
-        col_widths = [84 * mm, 34 * mm, 34 * mm, 34 * mm] # Kolom Akun/Item 84mm
+        col_widths = [84 * mm, 34 * mm, 34 * mm, 34 * mm]
     elif len(headers) == 3:
         col_widths = [96 * mm, 45 * mm, 45 * mm]
     else:
         col_widths = [(186 * mm) / len(headers)] * len(headers)
 
     t_detail = Table(table_rows, colWidths=col_widths, repeatRows=1)
-    t_detail.setStyle(TableStyle([
+    
+    t_styles = [
         ('BACKGROUND', (0, 0), (-1, 0), navy),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
         ('LEFTPADDING', (0, 0), (-1, -1), 4),
         ('RIGHTPADDING', (0, 0), (-1, -1), 4),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-    ]))
+    ]
+
+    # Beri warna latar belakang MERAH MUDA pada baris akun yang selisih
+    for i, row in enumerate(df.itertuples(), start=1):
+        if getattr(row, 'Selisih', 0) != 0:
+            t_styles.append(('BACKGROUND', (0, i), (-1, i), colors.HexColor("#FEE2E2")))
+
+    t_detail.setStyle(TableStyle(t_styles))
     elements.append(t_detail)
     elements.append(Spacer(1, 10))
 
