@@ -1221,7 +1221,69 @@ def main():
                 )
             except Exception as e:
                 st.error(f"Gagal membuat PDF: {e}")
+# Pemanggilan Fungsi Audit Selisih
+    cari_titik_selisih_otomatis(df)
 
+
+# --- FUNGSI DETEKSI SELISIH MATEMATIS OTOMATIS ---
+def cari_titik_selisih_otomatis(df_input):
+    df_clean = df_input.copy()
+    col_map = {str(col).strip().lower(): col for col in df_clean.columns}
+    
+    # Deteksi kolom secara dinamis
+    col_debet = next((col_map[k] for k in col_map if 'deb' in k or 'masuk' in k), None)
+    col_kredit = next((col_map[k] for k in col_map if 'kred' in k or 'keluar' in k), None)
+    col_saldo = next((col_map[k] for k in col_map if 'sald' in k or 'bal' in k), None)
+    
+    if not (col_debet and col_kredit and col_saldo):
+        return
+        
+    # Standardisasi format angka
+    for col in [col_debet, col_kredit, col_saldo]:
+        if df_clean[col].dtype == 'O':
+            df_clean[col] = (
+                df_clean[col].astype(str)
+                .str.replace('.', '', regex=False)
+                .str.replace(',', '.', regex=False)
+            )
+        df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce').fillna(0.0)
+
+    # Deteksi Arah Arus Saldo (Saldo Normal Debet vs Kredit)
+    # Menghitung pergerakan kumulatif untuk memastikan arah penambahan saldo
+    delta_debet = df_clean[col_debet] - df_clean[col_kredit]
+    
+    # Jika kecenderungan saldo bertambah saat Debet naik:
+    saldo_awal = df_clean[col_saldo].iloc[0] - delta_debet.iloc[0]
+    df_clean['Saldo_Seharusnya'] = saldo_awal + delta_debet.cumsum()
+    
+    # Evaluasi alternatif jika akun bersifat Saldo Normal Kredit
+    selisih_debet_mode = (df_clean[col_saldo] - df_clean['Saldo_Seharusnya']).abs().sum()
+    
+    delta_kredit = df_clean[col_kredit] - df_clean[col_debet]
+    saldo_awal_kredit = df_clean[col_saldo].iloc[0] - delta_kredit.iloc[0]
+    saldo_seharusnya_kredit = saldo_awal_kredit + delta_kredit.cumsum()
+    selisih_kredit_mode = (df_clean[col_saldo] - saldo_seharusnya_kredit).abs().sum()
+    
+    # Pilih hasil dengan tingkat deviasi paling rendah
+    if selisih_kredit_mode < selisih_debet_mode:
+        df_clean['Saldo_Seharusnya'] = saldo_seharusnya_kredit
+
+    df_clean['Selisih_Hitung'] = (df_clean[col_saldo] - df_clean['Saldo_Seharusnya']).round(2)
+
+    # Filter baris yang selisih saja
+    df_selisih = df_clean[df_clean['Selisih_Hitung'].abs() > 0.01]
+
+    # Output UI Streamlit
+    st.markdown("---")
+    st.subheader("🔍 Audit Otomatis Titik Selisih Saldo Berjalan")
+    if df_selisih.empty:
+        st.success("✅ Semua hitungan saldo berjalan imbang dan konsisten secara matematis.")
+    else:
+        st.error(f"⚠️ Ditemukan {len(df_selisih)} baris transaksi dengan selisih perhitungan:")
+        cols_to_show = [c for c in df_input.columns if c in [col_debet, col_kredit, col_saldo]] + ['Saldo_Seharusnya', 'Selisih_Hitung']
+        st.dataframe(df_selisih[cols_to_show], use_container_width=True)
+
+    
     # Footer
     st.markdown(
         f"<div class='app-footer'>© {CURRENT_YEAR} {OWNER}. All Rights Reserved.</div>",
