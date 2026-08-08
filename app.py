@@ -39,7 +39,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-t.markdown("""
+st.markdown("""
     <style>
     /* Paksa warna teks label dan nilai pada st.metric agar terlihat kontras & jelas */
     div[data-testid="stMetricValue"] {
