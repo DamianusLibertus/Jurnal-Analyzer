@@ -865,19 +865,39 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     story.append(tbl)
     story.append(Spacer(1, 12))
 
-    # Penjelasan audit
-    story.append(Paragraph("Penjelasan & Analisis Audit", h2))
-    for line in (explanation or "").split("\n"):
-        line = line.strip()
-        if not line:
-            story.append(Spacer(1, 4))
-            continue
-        clean = re.sub(r"[#*`]", "", line)
-        if line.startswith("###") or line.startswith("##"):
-            story.append(Paragraph(f"<b>{clean.strip()}</b>", body))
-        else:
-            story.append(Paragraph(clean, body))
+   # Penjelasan & Analisis Audit (Tampilan Cantik Berbentuk Callout Box)
+    story.append(Paragraph("<b>Penjelasan & Analisis Audit</b>", h2))
+    story.append(Spacer(1, 4))
 
+    clean_text = explanation.strip() if explanation else ""
+    if not clean_text or "tidak tersedia" in clean_text.lower() or "kuota" in clean_text.lower():
+        box_bg = colors.HexColor("#F8FAFC")
+        box_border = colors.HexColor("#CBD5E1")
+        formatted_html = (
+            "<b>Catatan Sistem:</b><br/>"
+            "Modul Analisis Otomatis AI tidak aktif. "
+            "Hasil rekapitulasi saldo dan kalkulasi selisih pada tabel di atas dihitung secara akurat dan presisi berdasarkan data transaksi."
+        )
+    else:
+        box_bg = colors.HexColor("#F0F9FF")
+        box_border = colors.HexColor("#BAE6FD")
+        txt = clean_text.replace("\n", "<br/>")
+        txt = re.sub(r"###\s*(.*?)(?:<br/>|$)", r"<b><font color='#1E3A5F'>\1</font></b><br/>", txt)
+        txt = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", txt)
+        txt = txt.replace("_", "")
+        formatted_html = txt
+
+    analysis_table = Table(
+        [[Paragraph(formatted_html, body)]],
+        colWidths=[170 * mm]
+    )
+    analysis_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,-1), box_bg),
+        ('BOX', (0,0), (-1,-1), 1, box_border),
+        ('PADDING', (0,0), (-1,-1), 8),
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+    ]))
+    story.append(analysis_table)
     story.append(Spacer(1, 16))
     story.append(Paragraph(
         f"<i>Dokumen ini dihasilkan otomatis. © {CURRENT_YEAR} {OWNER}. All Rights Reserved.</i>",
