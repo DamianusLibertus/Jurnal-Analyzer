@@ -1034,7 +1034,7 @@ def main():
         <div class="app-hero">
             <span class="gold-pill">PROFESSIONAL EDITION</span>
             <h1>{APP_TITLE}</h1>
-            <p>Ekstraksi AI Vision presisi tinggi • Pengecekan keseimbangan jurnal • Analisis selisih & audit otomatis</p>
+            <p>Ekstraksi data presisi tinggi • Pengecekan keseimbangan jurnal • Analisis selisih & audit otomatis</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1105,8 +1105,8 @@ def main():
             else:
                 st.error("Tidak ada data yang berhasil diekstrak dari file yang diunggah.")
     with c2:
-        st.caption("Excel/CSV/PDF digital diekstrak langsung (tanpa kuota AI). Foto/gambar memakai "
-                   "OCR lokal Tesseract; AI Vision hanya cadangan untuk dokumen scan. "
+        st.caption("Excel/CSV/PDF digital diekstrak langsung). Foto/gambar memakai "
+                   "OCR lokal Tesseract; Data Vision hanya cadangan untuk dokumen scan. "
                    "File diproses satu per satu — jika satu gagal, lainnya tetap diproses. "
                    "Selalu periksa & koreksi hasil di tabel sebelum mengunci analisis.")
 
@@ -1191,8 +1191,8 @@ def main():
             styled = styled.format({c: "{:,.2f}" for c in num_cols})
         st.dataframe(styled, use_container_width=True)
 
-        st.subheader("④ Penjelasan & Analisis Audit (AI Financial Analyst)")
-        st.markdown(res["explanation"])
+        st.subheader("④ Catatan & Ringkasan Audit")
+st.info("💡 Laporan dianalisis secara otomatis berdasarkan data transaksi. Harap periksa akun yang ditandai merah pada tabel di atas untuk melakukan penyesuaian jurnal.")
 
         # ===== Ekspor =====
         st.subheader("⑤ Ekspor & Cetak Laporan")
