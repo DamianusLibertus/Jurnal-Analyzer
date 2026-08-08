@@ -41,24 +41,31 @@ st.set_page_config(
 )
 st.markdown("""
     <style>
-    /* Paksa warna teks label dan nilai pada st.metric agar terlihat kontras & jelas */
-    div[data-testid="stMetricValue"] {
-        color: #0f172a !important;
-        font-weight: bold !important;
-        background-color: #ffffff !important;
-        padding: 4px 8px !important;
-        border-radius: 4px !important;
-    }
-    div[data-testid="stMetricLabel"] {
-        color: #334155 !important;
-        font-weight: 600 !important;
-    }
+    /* Mengatur latar belakang kartu metric */
     div[data-testid="stMetric"] {
         background-color: #ffffff !important;
         padding: 12px !important;
         border-radius: 8px !important;
         border: 1px solid #cbd5e1 !important;
-        box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.05) !important;
+    }
+    
+    /* Memaksa teks judul (LABEL) metric berwarna gelap dan tebal */
+    div[data-testid="stMetricLabel"] *, 
+    div[data-testid="stMetricLabel"] label,
+    div[data-testid="stMetricLabel"] p {
+        color: #1e293b !important;
+        font-weight: 700 !important;
+        font-size: 14px !important;
+    }
+    
+    /* Memaksa teks angka (VALUE) metric berwarna gelap */
+    div[data-testid="stMetricValue"] *, 
+    div[data-testid="stMetricValue"] div {
+        color: #0f172a !important;
+        font-weight: bold !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
     }
     </style>
 """, unsafe_allow_html=True)
