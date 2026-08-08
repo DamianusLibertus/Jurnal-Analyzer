@@ -773,7 +773,72 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8-sig")
 
 
-# Tabel Detail
+def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        topMargin=15 * mm,
+        bottomMargin=15 * mm,
+        leftMargin=12 * mm,
+        rightMargin=12 * mm,
+    )
+    ss = getSampleStyleSheet()
+    navy = colors.HexColor("#1E3A5F")
+    
+    title_style = ParagraphStyle("TitleStyle", parent=ss["Title"], textColor=navy, fontSize=15, leading=18, alignment=0)
+    h2 = ParagraphStyle("Heading2Style", parent=ss["Heading2"], textColor=navy, fontSize=11, leading=15, spaceBefore=8, spaceAfter=4)
+    small = ParagraphStyle("SmallStyle", parent=ss["Normal"], fontSize=8, leading=10, textColor=colors.grey)
+    body = ParagraphStyle("BodyStyle", parent=ss["Normal"], fontSize=8.5, leading=12, textColor=colors.HexColor("#1E293B"))
+    
+    th_style = ParagraphStyle("THStyle", parent=ss["Normal"], fontSize=8, leading=10, textColor=colors.white, fontName="Helvetica-Bold")
+    td_style = ParagraphStyle("TDStyle", parent=ss["Normal"], fontSize=7.5, leading=9.5, textColor=colors.HexColor("#1E293B"))
+
+    elements = []
+
+    # Kop Laporan
+    elements.append(Paragraph(f"<b>{APP_TITLE}</b>", title_style))
+    elements.append(Paragraph(f"Hak Cipta © {CURRENT_YEAR} {OWNER}. Seluruh Hak Cipta Dilindungi.", small))
+    elements.append(Paragraph(f"<i>Tanggal Cetak: {datetime.now().strftime('%d-%m-%Y %H:%M WIB')}</i>", small))
+    elements.append(Spacer(1, 8))
+
+    # Ringkasan Eksekutif
+    elements.append(Paragraph("<b>Ringkasan Eksekutif</b>", h2))
+    if mode == "jurnal":
+        summary_data = [
+            [Paragraph("<b>Metric</b>", th_style), Paragraph("<b>Nilai</b>", th_style)],
+            [Paragraph("Total Debet", td_style), Paragraph(rupiah(totals["total_debet"]), td_style)],
+            [Paragraph("Total Kredit", td_style), Paragraph(rupiah(totals["total_kredit"]), td_style)],
+            [Paragraph("Selisih (Debet - Kredit)", td_style), Paragraph(rupiah(totals["selisih"]), td_style)],
+            [Paragraph("Status", td_style), Paragraph("<b>SEIMBANG</b>" if totals["balanced"] else "<font color='red'><b>TIDAK SEIMBANG</b></font>", td_style)],
+        ]
+    else:
+        summary_data = [
+            [Paragraph("<b>Metric</b>", th_style), Paragraph("<b>Nilai</b>", th_style)],
+            [Paragraph("Total Target", td_style), Paragraph(rupiah(totals["total_target"]), td_style)],
+            [Paragraph("Total Realisasi", td_style), Paragraph(rupiah(totals["total_realisasi"]), td_style)],
+            [Paragraph("Selisih (Realisasi - Target)", td_style), Paragraph(rupiah(totals["selisih"]), td_style)],
+            [Paragraph("Status", td_style), Paragraph("<b>SESUAI</b>" if totals["balanced"] else "<font color='red'><b>DEVIASI</b></font>", td_style)],
+        ]
+
+    t_summary = Table(summary_data, colWidths=[110 * mm, 70 * mm])
+    t_summary.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), navy),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    elements.append(t_summary)
+    elements.append(Spacer(1, 10))
+
+    # Tabel Detail
     elements.append(Paragraph("<b>Rincian Data Analisis</b>", h2))
     headers = list(df.columns)
     
@@ -782,8 +847,6 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
     
     for idx, row in df.iterrows():
         r_list = []
-        # Beri warna merah HANYA jika ini adalah baris Ringkasan/Total/Akun yang tidak seimbang
-        # Untuk transaksi mentah biasa, tampilkan teks normal
         is_highlight = False
         if "Status" in row and str(row["Status"]).upper() in ["SELISIH", "TIDAK SEIMBANG", "DEVIASI"]:
             is_highlight = True
@@ -804,7 +867,6 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
         
         table_rows.append(r_list)
 
-    # Lebar kolom proporsional
     if len(headers) == 4:
         col_widths = [84 * mm, 34 * mm, 34 * mm, 34 * mm]
     elif len(headers) == 3:
@@ -824,7 +886,6 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
     ]
 
-    # Hanya beri warna background merah jika kolom Status bernilai SELISIH/DEVIASI
     for i, row in enumerate(df.itertuples(), start=1):
         if hasattr(row, 'Status') and str(getattr(row, 'Status')).upper() in ["SELISIH", "TIDAK SEIMBANG", "DEVIASI"]:
             t_styles.append(('BACKGROUND', (0, i), (-1, i), colors.HexColor("#FEE2E2")))
@@ -832,6 +893,19 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
     t_detail.setStyle(TableStyle(t_styles))
     elements.append(t_detail)
     elements.append(Spacer(1, 10))
+
+    # Analisis Audit
+    if explanation:
+        elements.append(Paragraph("<b>Penjelasan & Analisis Audit AI</b>", h2))
+        clean_exp = explanation.replace("#", "").replace("*", "")
+        for line in clean_exp.split("\n"):
+            if line.strip():
+                elements.append(Paragraph(line.strip(), body))
+                elements.append(Spacer(1, 2))
+
+    doc.build(elements)
+    return buf.getvalue()
+
 
 # ---------- STYLING ----------
 def inject_css():
