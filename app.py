@@ -1223,7 +1223,7 @@ def main():
                 st.error(f"Gagal membuat PDF: {e}")
 # Pemanggilan Fungsi Audit Selisih
     if 'df' in locals() and df is not None:
-    cari_titik_selisih_otomatis(df)
+        cari_titik_selisih_otomatis(df)
 
 
 # --- FUNGSI DETEKSI SELISIH MATEMATIS OTOMATIS ---
