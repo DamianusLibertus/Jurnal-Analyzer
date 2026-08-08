@@ -773,10 +773,6 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8-sig")
 
 
-def to_csv_bytes(df) -> bytes:
-    return df.to_csv(index=False).encode("utf-8")
-
-
 def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
@@ -911,10 +907,15 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
     elements.append(t_detail)
     elements.append(Spacer(1, 10))
 
-    # Analisis Audit
+    # Penjelasan & Catatan Analisis Audit
     if explanation:
-        elements.append(Paragraph("<b>Penjelasan & Analisis Audit AI</b>", h2))
-        clean_exp = explanation.replace("#", "").replace("*", "")
+        # Jika teks bawaan 'EMERGENT_LLM_KEY belum diset', ganti dengan pesan resmi
+        if "EMERGENT_LLM_KEY" in explanation or "Analisis AI tidak tersedia" in explanation:
+            clean_exp = "Catatan Audit: Laporan diekspor secara otomatis berdasarkan data transaksi yang diinput. Harap lakukan penyesuaian/jurnal koreksi pada akun yang ditandai merah."
+        else:
+            clean_exp = explanation.replace("#", "").replace("*", "")
+
+        elements.append(Paragraph("<b>Penjelasan & Catatan Analisis Audit</b>", h2))
         for line in clean_exp.split("\n"):
             if line.strip():
                 elements.append(Paragraph(line.strip(), body))
@@ -922,7 +923,6 @@ def build_pdf(df, totals, imbalanced, explanation, mode) -> bytes:
 
     doc.build(elements)
     return buf.getvalue()
-
 
 # ---------- STYLING ----------
 def inject_css():
