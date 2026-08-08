@@ -1115,18 +1115,29 @@ def main():
         st.subheader("② Koreksi Data (Human-in-the-Loop)")
         st.caption("Perbaiki angka/nama akun yang salah baca sebelum mengunci analisis. "
                    "Anda dapat menambah atau menghapus baris.")
-        # --- FITUR TAMBAH KOLOM BARU ---
-        with st.expander("➕ Tambah Kolom Baru ke Tabel", expanded=False):
-            c_name, c_type, c_btn = st.columns([2, 2, 1])
-            new_col = c_name.text_input("Nama Kolom Baru:", key="new_col_input")
-            col_type = c_type.selectbox("Tipe Data:", ["Teks", "Angka (0)"], key="col_type_input")
-            if c_btn.button("Tambah Kolom"):
-                if new_col and new_col not in st.session_state.df.columns:
-                    st.session_state.df[new_col] = 0 if col_type == "Angka (0)" else ""
-                    st.success(f"Kolom '{new_col}' berhasil ditambahkan!")
+        # --- FITUR HAPUS KOLOM PERMANEN ---
+        with st.expander("🗑️ Hapus Kolom dari Tabel", expanded=False):
+            col_sel, col_btn = st.columns([3, 1])
+            col_to_delete = col_sel.selectbox(
+                "Pilih kolom yang ingin dihapus secara permanen:", 
+                st.session_state.df.columns, 
+                key="del_col_select"
+            )
+            if col_btn.button("🗑️ Hapus", use_container_width=True):
+                if len(st.session_state.df.columns) > 1:
+                    st.session_state.df = st.session_state.df.drop(columns=[col_to_delete])
+                    st.success(f"Kolom '{col_to_delete}' berhasil dihapus!")
                     st.rerun()
-                elif new_col in st.session_state.df.columns:
-                    st.warning("Nama kolom sudah ada!")
+                else:
+                    st.error("Gagal! Tabel harus menyisakan minimal 1 kolom.")
+
+        # --- TABEL EDIT DATA ---
+        edited = st.data_editor(
+            st.session_state.df,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="editor",
+        )
 
         # --- TABEL EDIT DATA ---
         edited = st.data_editor(
