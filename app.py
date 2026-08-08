@@ -1139,14 +1139,6 @@ def main():
             key="editor",
         )
 
-        # --- TABEL EDIT DATA ---
-        edited = st.data_editor(
-            st.session_state.df,
-            num_rows="dynamic",
-            use_container_width=True,
-            key="editor",
-        )
-
         if st.button("🔒 Kunci Data & Jalankan Analisis", type="primary"):
             with st.spinner("Menghitung selisih & menyusun analisis audit..."):
                 full_df, totals, imbalanced = compute(normalize_df(edited, mode), mode)
