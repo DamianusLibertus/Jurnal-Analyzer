@@ -62,7 +62,13 @@ def rupiah(v: float) -> str:
     except Exception:
         return str(v)
 
-# ---------- Ekstraksi Lokal (PDFPlumber / PyMuPDF) ----------
+def is_noise_row(val: str) -> bool:
+    """Deteksi baris rekap/footer seperti TOTAL dan lokasi cetak."""
+    low = str(val).lower().replace(" ", "")
+    noise_keywords = ["total", "jumlah", "sanggau", "saldoawal", "saldoakhir", "halaman", "periode"]
+    return any(k in low for k in noise_keywords)
+
+# ---------- Ekstraksi Lokal (PDFPlumber) ----------
 def extract_pdf_local(raw_bytes: bytes) -> pd.DataFrame:
     try:
         import pdfplumber
@@ -79,7 +85,7 @@ def extract_pdf_local(raw_bytes: bytes) -> pd.DataFrame:
 
         for line in lines:
             low = line.lower()
-            if any(k in low for k in ["halaman", "jurnal transaksi", "periode", "total", "jumlah", "dicetak"]):
+            if any(k in low for k in ["halaman", "jurnal transaksi", "periode", "dicetak"]):
                 continue
             
             line_clean = date_re.sub(" ", line)
@@ -92,6 +98,10 @@ def extract_pdf_local(raw_bytes: bytes) -> pd.DataFrame:
             for m in num_tokens:
                 desc = desc.replace(m, " ")
             desc = re.sub(r"\s+", " ", desc).strip(" .-,:|")
+
+            # Mengabaikan baris TOTAL & Footer sejak ekstraksi awal
+            if is_noise_row(desc):
+                continue
 
             if len(amts) >= 2 and len(desc) > 2:
                 rows.append({
@@ -107,8 +117,16 @@ def extract_pdf_local(raw_bytes: bytes) -> pd.DataFrame:
 # ---------- Hitung Selisih & Koreksi ----------
 def compute_jurnal(df: pd.DataFrame):
     df = df.copy()
-    df["Debet"] = df["Debet"].apply(to_num)
-    df["Kredit"] = df["Kredit"].apply(to_num)
+    if "Debet" in df.columns:
+        df["Debet"] = df["Debet"].apply(to_num)
+    else:
+        df["Debet"] = 0.0
+
+    if "Kredit" in df.columns:
+        df["Kredit"] = df["Kredit"].apply(to_num)
+    else:
+        df["Kredit"] = 0.0
+
     df["Selisih"] = (df["Debet"] - df["Kredit"]).round(2)
     
     total_debet = float(df["Debet"].sum())
@@ -147,9 +165,54 @@ def main():
 
     if "df_raw" in st.session_state and st.session_state.df_raw is not None:
         st.subheader("① Pratinjau & Koreksi Data Tabel")
-        edited_df = st.data_editor(st.session_state.df_raw, num_rows="dynamic", use_container_width=True)
+
+        # ---------- PANEL ALAT TAMBAH / HAPUS KOLOM & BARIS ----------
+        with st.expander("🛠️ Alat Pengaturan Kolom & Pembersihan Baris", expanded=True):
+            c_clean, c_add, c_del = st.columns(3)
+            
+            with c_clean:
+                st.markdown("**1. Bersihkan Baris Sampah**")
+                if st.button("🧹 Hapus Baris TOTAL / Footer", use_container_width=True):
+                    col_akun = st.session_state.df_raw.columns[0]
+                    st.session_state.df_raw = st.session_state.df_raw[
+                        ~st.session_state.df_raw[col_akun].apply(is_noise_row)
+                    ].reset_index(drop=True)
+                    st.success("Baris T O T A L & Lokasi Cetak berhasil dibersihkan!")
+                    st.rerun()
+
+            with c_add:
+                st.markdown("**2. Tambah Kolom Baru**")
+                new_col_name = st.text_input("Nama Kolom Baru:", key="input_new_col")
+                if st.button("➕ Tambah Kolom", use_container_width=True):
+                    if new_col_name and new_col_name not in st.session_state.df_raw.columns:
+                        st.session_state.df_raw[new_col_name] = ""
+                        st.success(f"Kolom '{new_col_name}' berhasil ditambahkan!")
+                        st.rerun()
+
+            with c_del:
+                st.markdown("**3. Hapus Kolom**")
+                col_to_del = st.selectbox("Pilih Kolom yang Dihapus:", st.session_state.df_raw.columns, key="select_col_del")
+                if st.button("🗑️ Hapus Kolom", use_container_width=True):
+                    if len(st.session_state.df_raw.columns) > 1:
+                        st.session_state.df_raw = st.session_state.df_raw.drop(columns=[col_to_del])
+                        st.success(f"Kolom '{col_to_del}' berhasil dihapus!")
+                        st.rerun()
+
+        st.caption(
+            "💡 **Cara Manipulasi Baris Langsung pada Tabel:**\n"
+            "- **Tambah Baris Baru:** Gulir ke paling bawah tabel lalu klik baris kosong berciri tanda `+`.\n"
+            "- **Hapus Baris:** Centang kotak di paling kiri baris yang ingin dihapus, lalu tekan tombol **Delete** pada keyboard Anda atau klik ikon tong sampah di pojok kanan atas tabel."
+        )
+
+        edited_df = st.data_editor(
+            st.session_state.df_raw,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="editor_table"
+        )
 
         if st.button("🔒 Kunci Data & Cari Selisih Otomatis", type="primary"):
+            st.session_state.df_raw = edited_df
             computed_df, totals = compute_jurnal(edited_df)
             st.session_state.computed_df = computed_df
             st.session_state.totals = totals
@@ -171,15 +234,16 @@ def main():
         st.subheader("③ Tabel Transaksi (Akun Selisih Ditandai Merah)")
         
         def highlight_selisih_row(row):
-            if abs(row["Selisih"]) > 0.001:
+            if "Selisih" in row and abs(row["Selisih"]) > 0.001:
                 return ['background-color: #FEE2E2; color: #991B1B; font-weight: bold;'] * len(row)
             return [''] * len(row)
 
-        styled_df = df.style.apply(highlight_selisih_row, axis=1).format({
-            "Debet": "{:,.2f}",
-            "Kredit": "{:,.2f}",
-            "Selisih": "{:,.2f}"
-        })
+        fmt_dict = {}
+        if "Debet" in df.columns: fmt_dict["Debet"] = "{:,.2f}"
+        if "Kredit" in df.columns: fmt_dict["Kredit"] = "{:,.2f}"
+        if "Selisih" in df.columns: fmt_dict["Selisih"] = "{:,.2f}"
+
+        styled_df = df.style.apply(highlight_selisih_row, axis=1).format(fmt_dict)
         
         st.dataframe(styled_df, use_container_width=True)
 
