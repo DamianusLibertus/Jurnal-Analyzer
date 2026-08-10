@@ -1,7 +1,7 @@
 # =========================================================
 # COPYRIGHT & LICENSE NOTICE
 # Copyright (c) 2026 Damianus Libertus. All Rights Reserved.
-# Application: Aplikasi Analisis Jurnal & Selisih Laporan (Universal Multi-Model)
+# Application: Aplikasi Analisis Jurnal & Selisih Laporan (Universal Clean)
 # =========================================================
 
 import os
@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 CURRENT_YEAR = datetime.now().year
-APP_TITLE = "Aplikasi Analisis Jurnal & Selisih Laporan (Universal Multi-Model)"
+APP_TITLE = "Aplikasi Analisis Jurnal & Selisih Laporan (Universal Clean)"
 OWNER = "Damianus Libertus"
 
 st.set_page_config(
@@ -67,7 +67,7 @@ def rupiah(v: float) -> str:
     except Exception:
         return str(v)
 
-# ---------- UNIVERSAL MULTI-MODEL PARSER ----------
+# ---------- UNIVERSAL CLEANING PARSER (PEMBERSIHAN KETAT) ----------
 STD_COLS = ["KD", "No. Bukti", "Kode Perkiraan", "Nama Perkiraan", "Uraian", "Debet", "Kredit"]
 
 def universal_clean_and_parse(df_raw: pd.DataFrame):
@@ -130,6 +130,9 @@ def universal_clean_and_parse(df_raw: pd.DataFrame):
         nama_val = str(r.get("Nama Perkiraan", "")).strip()
         uraian_val = str(r.get("Uraian", "")).strip()
         
+        if bukti_val in ["ACC-NEW", "UNASSIGNED", ""] and to_num(r.get("Debet", 0)) == 0.0 and to_num(r.get("Kredit", 0)) == 0.0:
+            return False
+            
         combined_text = f"{kd_val} {bukti_val} {nama_val} {uraian_val}".lower()
         ignore_keywords = [
             "ksp cu", "jl. jendral", "periode:", "catatan:", "direverifikasi", 
@@ -313,16 +316,17 @@ def build_pdf_report(df, totals, report_name=""):
     light_red_bg = colors.HexColor("#FEE2E2")
     red_text = colors.HexColor("#991B1B")
 
-    title_style = ParagraphStyle("T1", parent=styles["Title"], fontSize=14, leading=16, textColor=navy, alignment=0)
+    title_style = ParagraphStyle("T1", parent=styles["Title"], fontSize=13, leading=15, textColor=navy, alignment=0)
     sub_style = ParagraphStyle("S1", parent=styles["Normal"], fontSize=8, textColor=colors.gray)
-    th_style = ParagraphStyle("TH", parent=styles["Normal"], fontSize=8, leading=10, textColor=colors.white, fontName="Helvetica-Bold", alignment=1)
-    td_style = ParagraphStyle("TD", parent=styles["Normal"], fontSize=7.5, leading=9)
-    td_red = ParagraphStyle("TDR", parent=styles["Normal"], fontSize=7.5, leading=9, textColor=red_text, fontName="Helvetica-Bold")
+    th_style = ParagraphStyle("TH", parent=styles["Normal"], fontSize=7.5, leading=9, textColor=colors.white, fontName="Helvetica-Bold", alignment=1)
+    td_style = ParagraphStyle("TD", parent=styles["Normal"], fontSize=7, leading=8.5)
+    td_right = ParagraphStyle("TDR", parent=styles["Normal"], fontSize=7, leading=8.5, alignment=2)
+    td_red = ParagraphStyle("TDRG", parent=styles["Normal"], fontSize=7, leading=8.5, textColor=red_text, fontName="Helvetica-Bold")
 
     elements.append(Paragraph(f"<b>{APP_TITLE}</b>", title_style))
     info_teks = f"Pemilik: {OWNER} | Sumber Laporan: <b>{report_name}</b> | Tanggal Cetak: {datetime.now().strftime('%d-%m-%Y %H:%M WIB')}"
     elements.append(Paragraph(info_teks, sub_style))
-    elements.append(Spacer(1, 6))
+    elements.append(Spacer(1, 4))
 
     mode = totals.get("mode")
     
@@ -352,7 +356,7 @@ def build_pdf_report(df, totals, report_name=""):
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
     ]))
     elements.append(t_sum)
-    elements.append(Spacer(1, 8))
+    elements.append(Spacer(1, 6))
 
     display_cols = [c for c in df.columns if not c.startswith("_")]
     headers = [Paragraph(f"<b>{c}</b>", th_style) for c in display_cols]
@@ -362,8 +366,8 @@ def build_pdf_report(df, totals, report_name=""):
         ('BACKGROUND', (0,0), (-1,0), navy),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-        ('TOPPADDING', (0,0), (-1,-1), 4),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+        ('TOPPADDING', (0,0), (-1,-1), 3),
     ]
 
     for idx, r in df.iterrows():
@@ -380,16 +384,17 @@ def build_pdf_report(df, totals, report_name=""):
             val = r.get(col, "")
             if col in ["Debet", "Kredit"]:
                 val_num = to_num(val)
-                cell_text = rupiah(val_num) if val_num != 0 or val != "" else str(val)
+                cell_text = rupiah(val_num) if val_num != 0 or val != "" else "Rp 0,00"
+                row_cells.append(Paragraph(cell_text, td_right))
             else:
-                cell_text = str(val)
-            row_cells.append(Paragraph(cell_text, curr_style))
+                row_cells.append(Paragraph(str(val), curr_style))
             
         rows_table.append(row_cells)
 
-    num_cols = len(display_cols)
-    page_width = 275 * mm
-    col_widths = [page_width / num_cols] * num_cols
+    col_widths = [15*mm, 30*mm, 25*mm, 55*mm, 85*mm, 32.5*mm, 32.5*mm]
+    if len(display_cols) != len(col_widths):
+        page_width = 275 * mm
+        col_widths = [page_width / len(display_cols)] * len(display_cols)
 
     t_detail = Table(rows_table, colWidths=col_widths, repeatRows=1)
     t_detail.setStyle(TableStyle(pdf_table_styles))
@@ -433,7 +438,7 @@ def main():
                 st.session_state.file_base_name = os.path.splitext(raw_fname)[0]
                 init_history(combined_df)
                 
-                st.success(f"Berhasil mengekstrak {len(all_frames)} file dengan berbagai model laporan secara terintegrasi!")
+                st.success(f"Berhasil mengekstrak {len(all_frames)} file secara bersih dan terintegrasi!")
             else:
                 st.error("Gagal membaca dokumen. Pastikan file memiliki struktur tabel transaksi yang valid.")
 
@@ -442,7 +447,7 @@ def main():
 
         st.subheader("② Pratinjau & Edit Tabel Data")
 
-        with st.expander("🛠️ Panel Alat Pengaturan, Sisip Baris (Atas/Tengah/Bawah), Edit Kolom, & Undo/Redo", expanded=True):
+        with st.expander("🛠️ Panel Alat Pengaturan, Sisip Baris, Edit Kolom, & Undo/Redo", expanded=True):
             col_ur1, col_ur2, col_space = st.columns([1, 1, 4])
             with col_ur1:
                 if st.button("↩️ Undo (Batalkan)", disabled=(st.session_state.history_idx <= 0)):
@@ -457,7 +462,6 @@ def main():
 
             st.divider()
 
-            # FITUR SISIP BARIS DI POSISI TERTENTU (ATAS, TENGAH, BAWAH)
             st.markdown("##### 📌 Sisip Baris Baru di Posisi Tertentu")
             ins_col1, ins_col2 = st.columns([2, 2])
             with ins_col1:
@@ -473,10 +477,8 @@ def main():
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("➕ Sisip Baris di Sini", type="secondary"):
                     df_current = st.session_state.df_raw.copy()
-                    # Buat baris kosong baru
-                    new_row = {col: ("JU" if col=="KD" else ("ACC-NEW" if col=="No. Bukti" else (0.0 if col in ["Debet", "Kredit"] else ""))) for col in df_current.columns}
+                    new_row = {col: ("JU" if col=="KD" else ("ACC-0000000" if col=="No. Bukti" else (0.0 if col in ["Debet", "Kredit"] else ""))) for col in df_current.columns}
                     
-                    # Split dataframe dan sisipkan baris baru di posisi pilihan
                     idx = int(insert_position)
                     if idx >= len(df_current):
                         df_updated = pd.concat([df_current, pd.DataFrame([new_row])], ignore_index=True)
@@ -568,14 +570,17 @@ def main():
         st.subheader("⑤ Cetak & Download Laporan")
         e1, e2 = st.columns(2)
 
+        # NAMA FILE HASIL UNDUHAN MENGIKUTI NAMA FILE ASLI YANG DIUPLOAD
+        safe_base_name = re.sub(r'[^\w\-_]', '_', base_name)
+
         with e1:
             try:
                 current_file_label = st.session_state.get("uploaded_file_name", "Dokumen Laporan")
                 pdf_bytes = build_pdf_report(df, totals, report_name=current_file_label)
                 
-                pdf_filename = f"Analisis_Universal_{datetime.now():%Y%m%d_%H%M}.pdf"
+                pdf_filename = f"Analisis_{safe_base_name}_{datetime.now():%Y%m%d_%H%M}.pdf"
                 st.download_button(
-                    "🖨️ Cetak / Download Laporan PDF (Lanskap & Info Lengkap)",
+                    "🖨️ Cetak / Download Laporan PDF (Rapi & Proporsional)",
                     data=pdf_bytes,
                     file_name=pdf_filename,
                     mime="application/pdf",
@@ -589,7 +594,7 @@ def main():
             with pd.ExcelWriter(buf_excel, engine="openpyxl") as writer:
                 df[display_cols].to_excel(writer, index=False, sheet_name="Hasil_Analisis")
             
-            excel_filename = f"Analisis_Universal_{datetime.now():%Y%m%d_%H%M}.xlsx"
+            excel_filename = f"Analisis_{safe_base_name}_{datetime.now():%Y%m%d_%H%M}.xlsx"
             st.download_button(
                 "📊 Download Laporan Excel (.xlsx)",
                 data=buf_excel.getvalue(),
