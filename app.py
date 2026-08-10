@@ -20,7 +20,6 @@ load_dotenv()
 CURRENT_YEAR = datetime.now().year
 APP_TITLE = "Aplikasi Analisis Jurnal & Selisih Laporan"
 OWNER = "Damianus Libertus"
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 st.set_page_config(
     page_title=APP_TITLE,
@@ -120,9 +119,10 @@ def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     df["Debet"] = df["Debet"].apply(to_num)
     df["Kredit"] = df["Kredit"].apply(to_num)
 
+    # FILTER AMAN (Tanpa memblokir nama tempat/wilayah seperti Sanggau)
     def is_valid_row(r):
         str_val = (str(r["KD"]) + str(r["No. Bukti"]) + str(r["Nama Perkiraan"]) + str(r["Uraian"])).lower().replace(" ", "")
-        if any(k in str_val for k in ["total", "jumlah", "sanggau", "saldoawal", "saldoakhir", "halaman"]):
+        if any(k in str_val for k in ["total", "jumlah", "saldoawal", "saldoakhir", "halaman"]):
             return False
         return True
 
@@ -466,6 +466,9 @@ def main():
                         push_history(st.session_state.df_raw)
                         st.rerun()
 
+        # Catatan: st.data_editor secara bawaan di Streamlit mendukung penambahan baris (num_rows="dynamic").
+        # Jika Anda ingin menyisipkan baris di posisi tertentu atau memindahkan urutannya dengan mudah, 
+        # Anda juga bisa melakukan edit langsung atau merapikannya lewat file Excel sumber sebelum diunggah.
         edited_df = st.data_editor(
             st.session_state.df_raw,
             num_rows="dynamic",
