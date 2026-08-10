@@ -234,7 +234,7 @@ def compute_jurnal(df: pd.DataFrame):
         
         def get_diff_reason(row_diff):
             if abs(row_diff) < 0.01:
-                return "Seimbang (Normal)"
+                return ""
             elif row_diff > 0:
                 return f"Tidak Seimbang: Debet kelebihan {rupiah(abs(row_diff))}"
             else:
@@ -245,7 +245,10 @@ def compute_jurnal(df: pd.DataFrame):
         df["Penyebab Selisih"] = df["_Bukti_Group"].map(group_totals["_Penyebab_Selisih"])
     else:
         df["_Selisih_Bukti"] = 0.0
-        df["Penyebab Selisih"] = "Analisis Total Rekapitulasi"
+        if abs(diff) < 0.01:
+            df["Penyebab Selisih"] = ""
+        else:
+            df["Penyebab Selisih"] = f"Total Selisih: {rupiah(abs(diff))}"
 
     totals = {
         "total_debet": total_debet,
