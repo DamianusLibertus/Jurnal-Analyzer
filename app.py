@@ -10,9 +10,8 @@ import io
 import json
 import uuid
 import base64
-import asyncio
 from io import BytesIO
-from datetime import datetime, timezone
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -23,10 +22,7 @@ load_dotenv()
 CURRENT_YEAR = datetime.now().year
 APP_TITLE = "Aplikasi Analisis Jurnal & Selisih Laporan"
 OWNER = "Damianus Libertus"
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
-MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = os.environ.get("DB_NAME", "test_database")
-VISION_MODEL = "gpt-5.4"
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 st.set_page_config(
     page_title=APP_TITLE,
@@ -66,81 +62,49 @@ def rupiah(v: float) -> str:
     except Exception:
         return str(v)
 
-def run_async(coro):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+# ---------- Ekstraksi Lokal (PDFPlumber / PyMuPDF) ----------
+def extract_pdf_local(raw_bytes: bytes) -> pd.DataFrame:
     try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+        import pdfplumber
+        lines = []
+        with pdfplumber.open(BytesIO(raw_bytes)) as pdf:
+            for page in pdf.pages:
+                txt = page.extract_text() or ""
+                lines.extend(txt.splitlines())
+        
+        rows = []
+        date_re = re.compile(r"\b\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4}\b")
+        ref_re = re.compile(r"\b(?:TAB|JU|OB|COA|BKK|BKM|KK|KM|ACC)[.-]?\d[\w.-]*\b", re.I)
+        num_re = re.compile(r"\(?-?\d{1,3}(?:\.\d{3})*(?:,\d+)?\)?")
 
-async def _llm_call(system_message: str, text: str, images_b64=None, timeout: int = 600) -> str:
-    from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=str(uuid.uuid4()),
-        system_message=system_message,
-    ).with_model("openai", VISION_MODEL)
-    contents = [ImageContent(image_base64=b) for b in (images_b64 or [])]
-    msg = UserMessage(text=text, file_contents=contents) if contents else UserMessage(text=text)
-    resp = await asyncio.wait_for(chat.send_message(msg), timeout=timeout)
-    return resp if isinstance(resp, str) else str(resp)
+        for line in lines:
+            low = line.lower()
+            if any(k in low for k in ["halaman", "jurnal transaksi", "periode", "total", "jumlah", "dicetak"]):
+                continue
+            
+            line_clean = date_re.sub(" ", line)
+            line_clean = ref_re.sub(" ", line_clean)
+            
+            num_tokens = num_re.findall(line_clean)
+            amts = [to_num(m) for m in num_tokens if not (m.isdigit() and 2020 <= int(m) <= 2030)]
+            
+            desc = line_clean
+            for m in num_tokens:
+                desc = desc.replace(m, " ")
+            desc = re.sub(r"\s+", " ", desc).strip(" .-,:|")
 
-def llm_call(system_message: str, text: str, images_b64=None, timeout: int = 600) -> str:
-    return run_async(_llm_call(system_message, text, images_b64, timeout))
+            if len(amts) >= 2 and len(desc) > 2:
+                rows.append({
+                    "Akun": desc[:150],
+                    "Debet": amts[-2] if len(amts) >= 2 else amts[0],
+                    "Kredit": amts[-1] if len(amts) >= 2 else 0.0
+                })
 
-def pdf_to_b64_images(raw_bytes: bytes, max_pages: int = 20):
-    import fitz
-    out = []
-    doc = fitz.open(stream=raw_bytes, filetype="pdf")
-    for page in doc[:max_pages]:
-        pix = page.get_pixmap(dpi=150)
-        out.append(base64.b64encode(pix.tobytes("png")).decode())
-    doc.close()
-    return out
-
-# ---------- 1. PROMPT AI VISION: Membaca Tabel Sesuai Aslinya ----------
-def vision_extract_jurnal(images_b64, mode: str, timeout: int = 600) -> pd.DataFrame:
-    system = (
-        "Anda adalah pakar OCR Akuntansi presisi tinggi. Tugas Anda membaca tabel jurnal "
-        "keuangan dan menyajikannya persis sesuai bentuk laporan aslinya."
-    )
-    
-    prompt = (
-        "Ekstrak seluruh baris transaksi dari gambar laporan jurnal ini ke dalam format JSON.\n"
-        "ATURAN STRUKTUR PENTING:\n"
-        "1. Kolom 'akun': Isi HANYA dengan Uraian / Nama Akun Transaksi yang bersih.\n"
-        "   - Hapus Tanggal (misal 01/07/2026) dari nama akun.\n"
-        "   - Hapus Kode Ref/Bukti (seperti TAB.002052040102, JU.001, BKK.002) dari nama akun.\n"
-        "2. Kolom 'debet': Masukkan angka nominal Debet (tanpa 'Rp', gunakan titik untuk desimal).\n"
-        "3. Kolom 'kredit': Masukkan angka nominal Kredit (tanpa 'Rp', gunakan titik untuk desimal).\n"
-        "4. Jika salah satu kolom kosong/nihil, isi dengan angka 0.\n"
-        "5. Jangan sertakan baris Total, Subtotal, atau Saldo Akhir.\n\n"
-        'Balas HANYA JSON valid dengan format persis:\n'
-        '{"rows": [{"akun": "Nama Akun Bersih", "debet": 0.0, "kredit": 0.0}]}'
-    )
-    
-    raw = llm_call(system, prompt, images_b64=images_b64, timeout=timeout)
-    
-    # Parse JSON
-    t = raw.strip()
-    t = re.sub(r"^```(?:json)?", "", t).strip().strip("```").strip()
-    m = re.search(r"\{.*\}", t, re.DOTALL)
-    if not m:
-        return pd.DataFrame()
-    
-    try:
-        data = json.loads(m.group(0))
-        rows = data.get("rows", [])
-        df = pd.DataFrame(rows)
-        df["debet"] = df["debet"].apply(to_num)
-        df["kredit"] = df["kredit"].apply(to_num)
-        df.columns = ["Akun", "Debet", "Kredit"]
-        return df
+        return pd.DataFrame(rows)
     except Exception:
         return pd.DataFrame()
 
-# ---------- 2. HITUNG SELISIH & STATUS ----------
+# ---------- Hitung Selisih & Koreksi ----------
 def compute_jurnal(df: pd.DataFrame):
     df = df.copy()
     df["Debet"] = df["Debet"].apply(to_num)
@@ -159,32 +123,7 @@ def compute_jurnal(df: pd.DataFrame):
     }
     return df, totals
 
-# ---------- 4 & 5. PROMPT AI AUDITOR: Alasan & Rekomendasi Masukan ----------
-def ai_audit_analysis(df: pd.DataFrame, totals: dict) -> str:
-    system = "Anda adalah Auditor Keuangan Senior. Berikan analisis audit profesional dalam Bahasa Indonesia."
-    
-    imbalanced_df = df[df["Selisih"].abs() > 0.001]
-    table_sample = imbalanced_df.to_markdown(index=False) if not imbalanced_df.empty else df.head(15).to_markdown(index=False)
-    
-    prompt = (
-        f"DATA RINGKASAN JURNAL:\n"
-        f"- Total Debet: {rupiah(totals['total_debet'])}\n"
-        f"- Total Kredit: {rupiah(totals['total_kredit'])}\n"
-        f"- Total Selisih: {rupiah(totals['selisih'])}\n"
-        f"- Status: {'SEIMBANG' if totals['balanced'] else 'TIDAK SEIMBANG'}\n\n"
-        f"TABEL TRANSAKSI (FOKUS SELISIH):\n{table_sample}\n\n"
-        "BUATKAN LAPORAN AUDIT DENGAN 3 BAGIAN WAJIB BERIKUT:\n"
-        "### 1. Rincian Akun Transaksi yang Mengalami Selisih\n"
-        "(Sebutkan nama-nama akun beserta nilai selisihnya secara spesifik)\n\n"
-        "### 2. Alasan & Penyebab Ketidakseimbangan\n"
-        "(Jelaskan secara logis kenapa selisih terjadi, misal: kelalaian input sisi kredit, pergeseran kolom kas/bank, atau transaksi pencairan tak seimbang)\n\n"
-        "### 3. Masukan & Rekomendasi Tindakan Koreksi\n"
-        "(Berikan langkah konkret perbaikan pembukuan dan draf ayat jurnal penyesuaian/koreksi yang harus dicatat)"
-    )
-    
-    return llm_call(system, prompt)
-
-# ---------- MAIN APP UI ----------
+# ---------- Main Application ----------
 def main():
     st.markdown(f"# 📊 {APP_TITLE}")
     st.caption(f"Dikembangkan oleh {OWNER}")
@@ -194,25 +133,17 @@ def main():
 
     if st.button("🚀 Mula-mula Baca & Analisis Dokumen", type="primary", disabled=not up_files):
         all_frames = []
-        with st.spinner("Membaca isi tabel & menyesuaikan dengan laporan asli via AI Emergent..."):
+        with st.spinner("Membaca isi tabel dan menyesuaikan dengan laporan asli..."):
             for f in up_files:
-                if f.name.endswith(".pdf"):
-                    imgs = pdf_to_b64_images(f.getvalue())
-                    for img in imgs:
-                        sub_df = vision_extract_jurnal([img], "jurnal")
-                        if not sub_df.empty:
-                            all_frames.append(sub_df)
-                else:
-                    b64_img = base64.b64encode(f.getvalue()).decode()
-                    sub_df = vision_extract_jurnal([b64_img], "jurnal")
-                    if not sub_df.empty:
-                        all_frames.append(sub_df)
+                df_loc = extract_pdf_local(f.getvalue())
+                if not df_loc.empty:
+                    all_frames.append(df_loc)
             
             if all_frames:
                 st.session_state.df_raw = pd.concat(all_frames, ignore_index=True)
-                st.success("Berhasil membaca tabel jurnal secara presisi!")
+                st.success("Berhasil membaca tabel jurnal secara otomatis!")
             else:
-                st.error("Gagal membaca dokumen. Pastikan file berisi tabel jurnal yang jelas.")
+                st.error("Gagal membaca dokumen. Pastikan file PDF berformat tabel jurnal yang jelas.")
 
     if "df_raw" in st.session_state and st.session_state.df_raw is not None:
         st.subheader("① Pratinjau & Koreksi Data Tabel")
@@ -222,9 +153,6 @@ def main():
             computed_df, totals = compute_jurnal(edited_df)
             st.session_state.computed_df = computed_df
             st.session_state.totals = totals
-            
-            with st.spinner("AI sedang menyusun alasan selisih & masukan koreksi..."):
-                st.session_state.audit_reason = ai_audit_analysis(computed_df, totals)
             st.rerun()
 
     if "computed_df" in st.session_state:
@@ -242,10 +170,8 @@ def main():
 
         st.subheader("③ Tabel Transaksi (Akun Selisih Ditandai Merah)")
         
-        # ---------- 3. TANDA MERAH UNTUK AKUN SELISIH ----------
         def highlight_selisih_row(row):
             if abs(row["Selisih"]) > 0.001:
-                # Merah muda terang untuk latar, teks merah tua bercetak tebal
                 return ['background-color: #FEE2E2; color: #991B1B; font-weight: bold;'] * len(row)
             return [''] * len(row)
 
@@ -256,10 +182,6 @@ def main():
         })
         
         st.dataframe(styled_df, use_container_width=True)
-
-        # ---------- 4 & 5. ALASAN DAN REKOMENDASI AI ----------
-        st.subheader("④ Alasan Ketidakseimbangan & Masukan Koreksi AI")
-        st.markdown(st.session_state.audit_reason)
 
 if __name__ == "__main__":
     main()
