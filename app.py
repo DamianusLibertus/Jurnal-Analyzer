@@ -67,7 +67,7 @@ def rupiah(v: float) -> str:
     except Exception:
         return str(v)
 
-# ---------- UNIVERSAL CLEANING PARSER (PEMBERSIHAN KETAT) ----------
+# ---------- UNIVERSAL CLEANING PARSER (DIPERBAIKI & UNIK) ----------
 STD_COLS = ["KD", "No. Bukti", "Kode Perkiraan", "Nama Perkiraan", "Uraian", "Debet", "Kredit"]
 
 def universal_clean_and_parse(df_raw: pd.DataFrame):
@@ -98,23 +98,32 @@ def universal_clean_and_parse(df_raw: pd.DataFrame):
     else:
         detected_mode = "nominatif"
 
+    # Pemetaan kolom secara aman dan unik tanpa duplikasi
     col_map = {}
+    assigned_targets = set()
+    
     for c in df.columns:
         cl = c.strip().lower().replace("\n", " ")
-        if cl in ['kd', 'jenis', 'tipe', 'jurnal']:
-            col_map[c] = 'KD'
-        elif 'no' in cl and 'bukti' in cl or 'bukti' in cl or 'ref' in cl:
-            col_map[c] = 'No. Bukti'
-        elif 'kode' in cl and 'perkiraan' in cl or cl == 'kode' or 'akun' in cl:
-            col_map[c] = 'Kode Perkiraan'
-        elif 'nama' in cl and 'perkiraan' in cl or 'nama perkiraan' in cl or 'keterangan' in cl or 'uraian' in cl:
-            col_map[c] = 'Nama Perkiraan'
-        elif 'uraian' in cl or 'keterangan dokumen' in cl or 'u r a i a n' in cl:
-            col_map[c] = 'Uraian'
-        elif cl.startswith('debet') or cl.startswith('deb') or 'debet' in cl:
-            col_map[c] = 'Debet'
-        elif cl.startswith('kredit') or cl.startswith('kred') or 'kredit' in cl:
-            col_map[c] = 'Kredit'
+        target = None
+        
+        if cl in ['kd', 'jenis', 'tipe', 'jurnal'] and 'KD' not in assigned_targets:
+            target = 'KD'
+        elif ('bukti' in cl or 'ref' in cl) and 'No. Bukti' not in assigned_targets:
+            target = 'No. Bukti'
+        elif ('kode' in cl and 'perkiraan' in cl) or cl == 'kode' and 'Kode Perkiraan' not in assigned_targets:
+            target = 'Kode Perkiraan'
+        elif (('nama' in cl and 'perkiraan' in cl) or cl == 'akun') and 'Nama Perkiraan' not in assigned_targets:
+            target = 'Nama Perkiraan'
+        elif ('uraian' in cl or 'keterangan' in cl or 'u r a i a n' in cl) and 'Uraian' not in assigned_targets:
+            target = 'Uraian'
+        elif (cl.startswith('debet') or cl.startswith('deb') or 'debet' in cl) and 'Debet' not in assigned_targets:
+            target = 'Debet'
+        elif (cl.startswith('kredit') or cl.startswith('kred') or 'kredit' in cl) and 'Kredit' not in assigned_targets:
+            target = 'Kredit'
+            
+        if target:
+            col_map[c] = target
+            assigned_targets.add(target)
 
     df = df.rename(columns=col_map)
 
@@ -570,7 +579,6 @@ def main():
         st.subheader("⑤ Cetak & Download Laporan")
         e1, e2 = st.columns(2)
 
-        # NAMA FILE HASIL UNDUHAN MENGIKUTI NAMA FILE ASLI YANG DIUPLOAD
         safe_base_name = re.sub(r'[^\w\-_]', '_', base_name)
 
         with e1:
