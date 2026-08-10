@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import re
 import streamlit as st
+from io import BytesIO
 
 # Konfigurasi halaman Streamlit
 st.set_page_config(
@@ -18,8 +19,8 @@ st.set_page_config(
 
 def robust_to_num(x) -> float:
     """
-    Fungsi pembersih angka yang handal untuk format akuntansi Indonesia 
-    (pemisah ribuan titik '.', desimal koma ',', dan negatif dalam kurung '(...)').
+    Fungsi pembersih angka handal agar nilai Kredit/Debet terbaca sempurna 
+    tanpa mengubah struktur atau tampilan aplikasi.
     """
     if x is None or pd.isna(x):
         return 0.0
@@ -101,10 +102,11 @@ def compute_jurnal(df_cleaned: pd.DataFrame):
     grouped["Status_Balance"] = abs(grouped["Selisih"]) < 1e-2
     return grouped
 
+# --- TAMPILAN UTAMA APLIKASI ---
 st.title("📊 Aplikasi Analisis Jurnal & Selisih Laporan")
-st.markdown("Unggah file Excel jurnal transaksi Anda untuk melakukan verifikasi keseimbangan Debet dan Kredit secara otomatis.")
+st.markdown("Pemilik: **Damianus Libertus** | Sumber Laporan Jurnal Transaksi")
 
-uploaded_file = st.file_uploader("Pilih File Excel Jurnal Transaksi", type=["xlsx", "xls"])
+uploaded_file = st.file_uploader("Unggah File Excel Jurnal Transaksi", type=["xlsx", "xls"])
 
 if uploaded_file is not None:
     try:
@@ -118,34 +120,59 @@ if uploaded_file is not None:
         total_kredit = df_cleaned["Kredit"].sum()
         selisih_total = total_debet - total_kredit
         
+        # Ringkasan Metrik
         st.markdown("---")
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Total Debet", f"Rp {total_debet:,.2f}")
         with col2:
             st.metric("Total Kredit", f"Rp {total_kredit:,.2f}")
         with col3:
             st.metric("Selisih Total", f"Rp {selisih_total:,.2f}", delta_color="inverse")
-            
-        if abs(selisih_total) < 1e-2:
-            st.success("✅ STATUS JURNAL: 100% SEIMBANG (BALANCE)")
-        else:
-            st.error("⚠️ STATUS JURNAL: PERHATIAN (ADA SELISIH)")
-            
-        st.markdown("### 🔍 Ringkasan Periksa Saldo Berbasis No. Bukti")
-        grouped_df = compute_jurnal(df_cleaned)
-        unbalanced = grouped_df[~grouped_df["Status_Balance"]]
+        with col4:
+            if abs(selisih_total) < 1e-2:
+                st.success("Status: BALANCE")
+            else:
+                st.error("Status: ADA SELISIH")
+                
+        # Tombol Download / Ekspor Kembali Tersedia
+        st.markdown("### 📥 Unduh & Ekspor Laporan")
+        col_dl1, col_dl2 = st.columns(2)
         
-        if len(unbalanced) == 0:
-            st.info("Semua nomor bukti tercatat balance dengan sempurna.")
-        else:
-            st.warning(f"Ditemukan {len(unbalanced)} nomor bukti yang memiliki selisih.")
-            st.dataframe(unbalanced)
+        # Export ke Excel Bersih
+        output_excel = BytesIO()
+        with pd.ExcelWriter(output_excel, engine='xlsxwriter') as writer:
+            df_cleaned.to_excel(writer, index=False, sheet_name='Jurnal Bersih')
+        output_excel.seek(0)
+        
+        with col_dl1:
+            st.download_button(
+                label="📥 Unduh Excel Jurnal Normalisasi",
+                data=output_excel,
+                file_name="Jurnal_Transaksi_Normal_Juli_2026.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
             
+        grouped_df = compute_jurnal(df_cleaned)
+        output_summary = BytesIO()
+        with pd.ExcelWriter(output_summary, engine='xlsxwriter') as writer:
+            grouped_df.to_excel(writer, index=False, sheet_name='Ringkasan Bukti')
+        output_summary.seek(0)
+        
+        with col_dl2:
+            st.download_button(
+                label="📥 Unduh Ringkasan Periksa Selisih (Excel)",
+                data=output_summary,
+                file_name="Ringkasan_Selisih_No_Bukti.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+        # Detail Tabel
+        st.markdown("---")
         st.markdown("### 📋 Detail Seluruh Baris Jurnal")
         st.dataframe(df_cleaned, use_container_width=True)
         
     except Exception as e:
         st.error(f"Terjadi kesalahan saat memproses file: {e}")
 else:
-    st.info("Silakan unggah file Excel (.xlsx) untuk memulai analisis.")
+    st.info("Silakan unggah file Excel Anda untuk memulai.")
