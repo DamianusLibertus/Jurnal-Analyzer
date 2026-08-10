@@ -63,11 +63,11 @@ def rupiah(v: float) -> str:
     except Exception:
         return str(v)
 
-# ---------- NORMALISASI TABEL ACCURATE / COOP ----------
+# ---------- NORMALISASI TABEL JURNAL & LAPORAN KEUANGAN ----------
 STD_COLS = ["KD", "No. Bukti", "Kode Perkiraan", "Nama Perkiraan", "Uraian", "Debet", "Kredit"]
 
 def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
-    """Saring kolom & baris agar sesuai dengan struktur jurnal 7 kolom."""
+    """Saring kolom & baris agar sesuai dengan struktur jurnal atau laporan keuangan."""
     if df_raw is None or df_raw.empty:
         return pd.DataFrame(columns=STD_COLS)
 
@@ -76,13 +76,22 @@ def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     col_map = {}
     for c in df.columns:
         cl = str(c).strip().lower()
-        if cl in ["kd", "jenis", "tipe"]: col_map[c] = "KD"
-        elif "bukti" in cl or "ref" in cl or "no" == cl: col_map[c] = "No. Bukti"
-        elif "kode" in cl or "acc" in cl or "rekening" in cl: col_map[c] = "Kode Perkiraan"
-        elif "nama" in cl or "perkiraan" in cl or "akun" in cl: col_map[c] = "Nama Perkiraan"
-        elif "uraian" in cl or "keterangan" in cl or "memo" in cl: col_map[c] = "Uraian"
-        elif "deb" in cl or "masuk" in cl: col_map[c] = "Debet"
-        elif "kred" in cl or "keluar" in cl: col_map[c] = "Kredit"
+        if cl in ["kd", "jenis", "tipe", "jurnal"]: 
+            col_map[c] = "KD"
+        elif "bukti" in cl or "ref" in cl or "no bukti" in cl: 
+            col_map[c] = "No. Bukti"
+        elif "kode" in cl or "acc" in cl or "rekening" in cl or "no rek" in cl: 
+            col_map[c] = "Kode Perkiraan"
+        elif "nama" in cl or "perkiraan" in cl or "akun" in cl or "nasabah" in cl: 
+            col_map[c] = "Nama Perkiraan"
+        elif "uraian" in cl or "keterangan" in cl or "memo" in cl or "alamat" in cl: 
+            col_map[c] = "Uraian"
+        elif "deb" in cl or "masuk" in cl or "debit" in cl or cl == "d": 
+            col_map[c] = "Debet"
+        elif "kred" in cl or "keluar" in cl or "credit" in cl or cl == "k": 
+            col_map[c] = "Kredit"
+        elif "saldo" in cl or "jumlah" in cl or "total" in cl:
+            col_map[c] = "Debet"
 
     df = df.rename(columns=col_map)
 
@@ -194,7 +203,7 @@ def push_history(df):
     st.session_state.history.append(df.copy())
     st.session_state.history_idx = len(st.session_state.history) - 1
 
-# ---------- HITUNG ANALISIS & DETEKSI SELISIH + PENYEBAB ----------
+# ---------- FUNGSI UTAMA ANALISIS JURNAL & DETEKSI SELISIH ----------
 def compute_jurnal(df: pd.DataFrame):
     df = df.copy()
     
@@ -236,7 +245,7 @@ def compute_jurnal(df: pd.DataFrame):
         df["Penyebab Selisih"] = df["_Bukti_Group"].map(group_totals["_Penyebab_Selisih"])
     else:
         df["_Selisih_Bukti"] = 0.0
-        df["Penyebab Selisih"] = "Seimbang / Tanpa Group Bukti"
+        df["Penyebab Selisih"] = "Analisis Total Rekapitulasi"
 
     totals = {
         "total_debet": total_debet,
@@ -246,7 +255,7 @@ def compute_jurnal(df: pd.DataFrame):
     }
     return df, totals
 
-# ---------- EKSPOR PDF REPORTLAB (DINAMIS, LANSKAP, & INFO LAPORAN) ----------
+# ---------- EKSPOR PDF REPORTLAB ----------
 def build_pdf_report(df, totals, report_name=""):
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib import colors
