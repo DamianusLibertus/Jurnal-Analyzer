@@ -63,16 +63,19 @@ def rupiah(v: float) -> str:
     except Exception:
         return str(v)
 
-# ---------- NORMALISASI TABEL JURNAL & LAPORAN KEUANGAN ----------
+# ---------- NORMALISASI TABEL JURNAL & NOMINATIF ----------
 STD_COLS = ["KD", "No. Bukti", "Kode Perkiraan", "Nama Perkiraan", "Uraian", "Debet", "Kredit"]
 
 def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
-    """Saring kolom & baris agar sesuai dengan struktur jurnal atau laporan keuangan."""
     if df_raw is None or df_raw.empty:
         return pd.DataFrame(columns=STD_COLS)
 
     df = df_raw.copy()
     
+    # Deteksi apakah file ini murni Laporan Saldo / Nominatif (tidak punya kolom debet/kredit eksplisit)
+    cols_lower = [str(c).strip().lower() for c in df.columns]
+    is_nominatif = not any("deb" in c or "kred" in c for c in cols_lower)
+
     col_map = {}
     for c in df.columns:
         cl = str(c).strip().lower()
@@ -80,18 +83,18 @@ def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
             col_map[c] = "KD"
         elif "bukti" in cl or "ref" in cl or "no bukti" in cl: 
             col_map[c] = "No. Bukti"
-        elif "kode" in cl or "acc" in cl or "rekening" in cl or "no rek" in cl: 
+        elif "kode" in cl or "acc" in cl or "rekening" in cl or "no rek" in cl or "no." == cl: 
             col_map[c] = "Kode Perkiraan"
         elif "nama" in cl or "perkiraan" in cl or "akun" in cl or "nasabah" in cl: 
             col_map[c] = "Nama Perkiraan"
-        elif "uraian" in cl or "keterangan" in cl or "memo" in cl or "alamat" in cl: 
+        elif "uraian" in cl or "keterangan" in cl or "memo" in cl or "alamat" in cl or "kecamatan" in cl: 
             col_map[c] = "Uraian"
         elif "deb" in cl or "masuk" in cl or "debit" in cl or cl == "d": 
             col_map[c] = "Debet"
         elif "kred" in cl or "keluar" in cl or "credit" in cl or cl == "k": 
             col_map[c] = "Kredit"
-        elif "saldo" in cl or "jumlah" in cl or "total" in cl or "nilai" in cl:
-            col_map[c] = "Debet"
+        elif is_nominatif and ("saldo" in cl or "jumlah" in cl or "total" in cl or "nilai" in cl or "pokok" in cl or "jasa" in cl):
+            col_map[c] = "Debet" # Masukkan ke kolom Debet sebagai representasi nominal saldo
 
     df = df.rename(columns=col_map)
 
@@ -203,22 +206,18 @@ def push_history(df):
     st.session_state.history.append(df.copy())
     st.session_state.history_idx = len(st.session_state.history) - 1
 
-# ---------- FUNGSI UTAMA ANALISIS JURNAL & DETEKSI SELISIH (FLEKSIBEL) ----------
+# ---------- FUNGSI ANALISIS (CERDAS: JURNAL VS LAPORAN SALDO) ----------
 def compute_jurnal(df: pd.DataFrame):
     df = df.copy()
     
-    # Deteksi kolom nominal secara fleksibel (mencakup Debet, Saldo, Jumlah, Nilai)
-    debet_col = next((c for c in df.columns if any(k in str(c).lower() for k in ["deb", "saldo", "jumlah", "nilai"])), None)
-    if not debet_col:
-        debet_col = "Debet" if "Debet" in df.columns else df.columns[5] if len(df.columns) > 5 else df.columns[-2]
+    # Deteksi apakah ini laporan saldo / nominatif (tidak ada transaksi kredit/mutasi)
+    raw_cols_lower = [str(c).lower() for c in df.columns]
+    is_nominatif_mode = not any("kred" in c or "credit" in c or "keluar" in c for c in raw_cols_lower)
 
-    kredit_col = next((c for c in df.columns if any(k in str(c).lower() for k in ["kred", "credit", "keluar"])), None)
-    if not kredit_col:
-        kredit_col = "Kredit" if "Kredit" in df.columns else df.columns[-1]
-
+    debet_col = next((c for c in df.columns if any(k in str(c).lower() for k in ["deb", "saldo", "jumlah", "nilai", "pokok"])), "Debet")
+    kredit_col = next((c for c in df.columns if any(k in str(c).lower() for k in ["kred", "credit", "keluar"])), "Kredit")
     bukti_col = next((c for c in df.columns if "bukti" in str(c).lower() or "ref" in str(c).lower()), None)
 
-    # Pastikan kolom terdeteksi dengan benar dan diubah jadi angka
     if debet_col in df.columns:
         df[debet_col] = df[debet_col].apply(to_num)
     if kredit_col in df.columns and kredit_col != debet_col:
@@ -228,10 +227,24 @@ def compute_jurnal(df: pd.DataFrame):
             df["Kredit"] = 0.0
         kredit_col = "Kredit"
 
-    total_debet = float(df[debet_col].sum())
+    total_debet = float(df[debet_col].sum() if debet_col in df.columns else 0.0)
     total_kredit = float(df[kredit_col].sum() if kredit_col in df.columns else 0.0)
-    diff = round(total_debet - total_kredit, 2)
 
+    # JIKA LAPORAN SALDO / NOMINATIF: Jangan anggap selisih/tidak seimbang, cukup tampilkan total rekapitulasi saldo!
+    if is_nominatif_mode:
+        df["_Selisih_Bukti"] = 0.0
+        df["Penyebab Selisih"] = ""
+        totals = {
+            "total_debet": total_debet,
+            "total_kredit": 0.0,
+            "selisih": 0.0,
+            "balanced": True, # Selalu anggap valid/seimbang untuk laporan saldo
+            "mode": "nominatif"
+        }
+        return df, totals
+
+    # JIKA JURNAL AKUNTANSI STANDAR: Lakukan cek selisih berpasangan
+    diff = round(total_debet - total_kredit, 2)
     if bukti_col and bukti_col in df.columns:
         df["_Bukti_Group"] = df[bukti_col].astype(str).replace("", None).ffill().fillna("UNASSIGNED")
         group_totals = df.groupby("_Bukti_Group")[[debet_col, kredit_col]].sum()
@@ -259,7 +272,8 @@ def compute_jurnal(df: pd.DataFrame):
         "total_debet": total_debet,
         "total_kredit": total_kredit,
         "selisih": diff,
-        "balanced": abs(diff) < 0.01
+        "balanced": abs(diff) < 0.01,
+        "mode": "jurnal"
     }
     return df, totals
 
@@ -289,11 +303,21 @@ def build_pdf_report(df, totals, report_name=""):
     elements.append(Paragraph(info_teks, sub_style))
     elements.append(Spacer(1, 6))
 
-    summary_data = [
-        [Paragraph("<b>Total Debet</b>", th_style), Paragraph("<b>Total Kredit</b>", th_style), Paragraph("<b>Selisih Total</b>", th_style), Paragraph("<b>Status Jurnal</b>", th_style)],
-        [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph("<b>SEIMBANG</b>" if totals["balanced"] else "<font color='red'><b>TIDAK SEIMBANG</b></font>", td_style)]
-    ]
-    t_sum = Table(summary_data, colWidths=[65*mm, 65*mm, 65*mm, 60*mm])
+    is_nominatif = totals.get("mode") == "nominatif"
+    
+    if is_nominatif:
+        summary_data = [
+            [Paragraph("<b>Total Rekapitulasi Saldo / Nominal</b>", th_style), Paragraph("<b>Status Laporan</b>", th_style)],
+            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph("<b>LAPORAN SALDO VALID (NOMINATIF)</b>", td_style)]
+        ]
+        t_sum = Table(summary_data, colWidths=[130*mm, 145*mm])
+    else:
+        summary_data = [
+            [Paragraph("<b>Total Debet</b>", th_style), Paragraph("<b>Total Kredit</b>", th_style), Paragraph("<b>Selisih Total</b>", th_style), Paragraph("<b>Status Jurnal</b>", th_style)],
+            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph("<b>SEIMBANG</b>" if totals["balanced"] else "<font color='red'><b>TIDAK SEIMBANG</b></font>", td_style)]
+        ]
+        t_sum = Table(summary_data, colWidths=[65*mm, 65*mm, 65*mm, 60*mm])
+
     t_sum.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), navy), 
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
@@ -308,16 +332,15 @@ def build_pdf_report(df, totals, report_name=""):
     rows_table = [headers]
 
     for _, r in df.iterrows():
-        is_bad = abs(r.get("_Selisih_Bukti", 0)) > 0.01
+        is_bad = not is_nominatif and abs(r.get("_Selisih_Bukti", 0)) > 0.01
         curr_style = td_red if is_bad else td_style
         
         row_cells = []
         for col in display_cols:
             val = r.get(col, "")
-            # Format rupiah jika kolom berisi angka nominal
-            if any(k in col.lower() for k in ["deb", "kred", "saldo", "jumlah", "nilai"]):
+            if any(k in col.lower() for k in ["deb", "kred", "saldo", "jumlah", "nilai", "pokok"]):
                 val_num = to_num(val)
-                cell_text = rupiah(val_num)
+                cell_text = rupiah(val_num) if val_num != 0 or val != "" else str(val)
             else:
                 cell_text = str(val)
             row_cells.append(Paragraph(cell_text, curr_style))
@@ -433,20 +456,26 @@ def main():
     if "computed_df" in st.session_state:
         df = st.session_state.computed_df
         totals = st.session_state.totals
+        is_nominatif = totals.get("mode") == "nominatif"
 
         st.divider()
-        st.subheader("③ Ringkasan Hasil Analisis Selisih")
+        st.subheader("③ Ringkasan Hasil Analisis")
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total Debet", rupiah(totals["total_debet"]))
-        c2.metric("Total Kredit", rupiah(totals["total_kredit"]))
-        c3.metric("Selisih Total", rupiah(totals["selisih"]))
-        c4.metric("Status Jurnal", "SEIMBANG ✅" if totals["balanced"] else "TIDAK SEIMBANG ⚠️")
+        if is_nominatif:
+            c1, c2 = st.columns(2)
+            c1.metric("Total Rekapitulasi Saldo / Nominal", rupiah(totals["total_debet"]))
+            c2.metric("Status Laporan", "LAPORAN SALDO VALID ✅")
+        else:
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Total Debet", rupiah(totals["total_debet"]))
+            c2.metric("Total Kredit", rupiah(totals["total_kredit"]))
+            c3.metric("Selisih Total", rupiah(totals["selisih"]))
+            c4.metric("Status Jurnal", "SEIMBANG ✅" if totals["balanced"] else "TIDAK SEIMBANG ⚠️")
 
-        st.subheader("④ Tabel Transaksi (Hanya Transaksi Selisih Ditandai Merah)")
+        st.subheader("④ Tabel Rincian Data")
 
         def highlight_unbalanced_voucher(row):
-            if abs(row.get("_Selisih_Bukti", 0)) > 0.01:
+            if not is_nominatif and abs(row.get("_Selisih_Bukti", 0)) > 0.01:
                 return ['background-color: #FEE2E2; color: #991B1B; font-weight: bold;'] * len(row)
             return [''] * len(row)
 
@@ -454,7 +483,7 @@ def main():
         styled_df = df[display_cols].style.apply(
             highlight_unbalanced_voucher, axis=1
         ).format({
-            c: "{:,.2f}" for c in display_cols if any(k in c.lower() for k in ["deb", "kred", "saldo", "jumlah", "nilai"])
+            c: "{:,.2f}" for c in display_cols if any(k in c.lower() for k in ["deb", "kred", "saldo", "jumlah", "nilai", "pokok"])
         }, na_rep="")
 
         st.dataframe(styled_df, use_container_width=True)
@@ -465,12 +494,12 @@ def main():
 
         with e1:
             try:
-                current_file_label = st.session_state.get("uploaded_file_name", "Dokumen Jurnal")
+                current_file_label = st.session_state.get("uploaded_file_name", "Dokumen Laporan")
                 pdf_bytes = build_pdf_report(df, totals, report_name=current_file_label)
                 st.download_button(
                     "🖨️ Cetak / Download Laporan PDF (Lanskap & Info Lengkap)",
                     data=pdf_bytes,
-                    file_name=f"Laporan_Selisih_Jurnal_{datetime.now():%Y%m%d_%H%M}.pdf",
+                    file_name=f"Laporan_Analisis_{datetime.now():%Y%m%d_%H%M}.pdf",
                     mime="application/pdf",
                     use_container_width=True
                 )
@@ -482,9 +511,9 @@ def main():
             with pd.ExcelWriter(buf_excel, engine="openpyxl") as writer:
                 df[display_cols].to_excel(writer, index=False, sheet_name="Hasil_Analisis")
             st.download_button(
-                "📊 Download Laporan Excel (.xlsx dengan Catatan Selisih)",
+                "📊 Download Laporan Excel (.xlsx)",
                 data=buf_excel.getvalue(),
-                file_name=f"Analisis_Jurnal_{datetime.now():%Y%m%d_%H%M}.xlsx",
+                file_name=f"Analisis_Laporan_{datetime.now():%Y%m%d_%H%M}.pdf" if False else f"Analisis_Laporan_{datetime.now():%Y%m%d_%H%M}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
