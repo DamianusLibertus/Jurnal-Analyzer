@@ -205,7 +205,7 @@ def push_history(df):
     st.session_state.history.append(df.copy())
     st.session_state.history_idx = len(st.session_state.history) - 1
 
-# ---------- FUNGSI ANALISIS (CERDAS: JURNAL VS LAPORAN SALDO) ----------
+# ---------- FUNGSI ANALISIS (ANALISIS ARUS KAS & POSISI JURNAL) ----------
 def compute_jurnal(df: pd.DataFrame):
     df = df.copy()
     
@@ -215,6 +215,7 @@ def compute_jurnal(df: pd.DataFrame):
     debet_col = next((c for c in df.columns if any(k in str(c).lower() for k in ["deb", "saldo", "jumlah", "nilai", "pokok"])), "Debet")
     kredit_col = next((c for c in df.columns if any(k in str(c).lower() for k in ["kred", "credit", "keluar"])), "Kredit")
     bukti_col = next((c for c in df.columns if "bukti" in str(c).lower() or "ref" in str(c).lower()), None)
+    nama_col = next((c for c in df.columns if "nama" in str(c).lower() or "perkiraan" in str(c).lower() or "akun" in str(c).lower()), "Nama Perkiraan")
 
     if debet_col in df.columns:
         df[debet_col] = df[debet_col].apply(to_num)
@@ -246,15 +247,32 @@ def compute_jurnal(df: pd.DataFrame):
         group_totals = df.groupby("_Bukti_Group")[[debet_col, kredit_col]].sum()
         group_totals["_Group_Diff"] = (group_totals[debet_col] - group_totals[kredit_col]).round(2)
         
-        def get_diff_reason(row_diff):
-            if abs(row_diff) < 0.01:
-                return ""
-            elif row_diff > 0:
-                return f"Tidak Seimbang: Debet kelebihan {rupiah(abs(row_diff))}"
-            else:
-                return f"Tidak Seimbang: Kredit kelebihan {rupiah(abs(row_diff))}"
+        # Analisis Cerdas Posisi Uang Masuk / Keluar & Posisi Jurnal
+        def get_smart_diff_reason(group_key):
+            g_df = df[df["_Bukti_Group"] == group_key]
+            d_sum = g_df[debet_col].sum()
+            k_sum = g_df[kredit_col].sum()
+            g_diff = round(d_sum - k_sum, 2)
 
-        group_totals["_Penyebab_Selisih"] = group_totals["_Group_Diff"].apply(get_diff_reason)
+            if abs(g_diff) < 0.01:
+                return ""
+
+            # Cek apakah ada akun Kas / Bank / Teller yang terlibat dalam kelompok bukti ini
+            text_gabungan = " ".join(g_df[nama_col].astype(str) + " " + g_df.get("Uraian", "").astype(str)).lower()
+            ada_kas = any(k in text_gabungan for k in ["kas", "bank", "teller", "cimb", "bri", "bni", "mandiri"])
+
+            if g_diff > 0:
+                if ada_kas:
+                    return f"Selisih: Debet kelebihan {rupiah(g_diff)} (Posisi Kas Masuk/Penerimaan tidak seimbang dengan alokasi kredit)"
+                else:
+                    return f"Selisih: Debet kelebihan {rupiah(g_diff)} (Posisi Jurnal Alokasi Biaya/Aset lebih besar dari sumber dana)"
+            else:
+                if ada_kas:
+                    return f"Selisih: Kredit kelebihan {rupiah(abs(g_diff))} (Posisi Kas Keluar/Pengeluaran tidak berimbang dengan rincian beban)"
+                else:
+                    return f"Selisih: Kredit kelebihan {rupiah(abs(g_diff))} (Posisi Jurnal Pendapatan/Sumber lebih besar dari penempatan)"
+
+        group_totals["_Penyebab_Selisih"] = group_totals.index.map(get_smart_diff_reason)
         df["_Selisih_Bukti"] = df["_Bukti_Group"].map(group_totals["_Group_Diff"])
         df["Penyebab Selisih"] = df["_Bukti_Group"].map(group_totals["_Penyebab_Selisih"])
     else:
@@ -262,7 +280,7 @@ def compute_jurnal(df: pd.DataFrame):
         if abs(diff) < 0.01:
             df["Penyebab Selisih"] = ""
         else:
-            df["Penyebab Selisih"] = f"Total Selisih: {rupiah(abs(diff))}"
+            df["Penyebab Selisih"] = f"Total Selisih: {rupiah(abs(diff))} (Posisi Total Debet & Kredit tidak match)"
 
     totals = {
         "total_debet": total_debet,
@@ -273,7 +291,7 @@ def compute_jurnal(df: pd.DataFrame):
     }
     return df, totals
 
-# ---------- EKSPOR PDF REPORTLAB (DENGAN BLOK MERAH MENYALA) ----------
+# ---------- EKSPOR PDF REPORTLAB ----------
 def build_pdf_report(df, totals, report_name=""):
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib import colors
@@ -393,7 +411,10 @@ def main():
             if all_frames:
                 combined_df = pd.concat(all_frames, ignore_index=True)
                 st.session_state.df_raw = combined_df
-                st.session_state.uploaded_file_name = ", ".join([f.name for f in up_files])
+                # Simpan nama file asli tanpa ekstensi untuk penamaan file download yang rapi
+                raw_fname = up_files[0].name
+                st.session_state.uploaded_file_name = raw_fname
+                st.session_state.file_base_name = os.path.splitext(raw_fname)[0]
                 init_history(combined_df)
                 st.success("Data berhasil diekstrak dan disesuaikan otomatis!")
             else:
@@ -462,6 +483,7 @@ def main():
         df = st.session_state.computed_df
         totals = st.session_state.totals
         is_nominatif = totals.get("mode") == "nominatif"
+        base_name = st.session_state.get("file_base_name", "Laporan_Analisis")
 
         st.divider()
         st.subheader("③ Ringkasan Hasil Analisis")
@@ -501,10 +523,13 @@ def main():
             try:
                 current_file_label = st.session_state.get("uploaded_file_name", "Dokumen Laporan")
                 pdf_bytes = build_pdf_report(df, totals, report_name=current_file_label)
+                
+                # Nama file PDF mengikuti nama file asli yang diunggah
+                pdf_filename = f"Analisis_{base_name}_{datetime.now():%Y%m%d_%H%M}.pdf"
                 st.download_button(
                     "🖨️ Cetak / Download Laporan PDF (Lanskap & Info Lengkap)",
                     data=pdf_bytes,
-                    file_name=f"Laporan_Analisis_{datetime.now():%Y%m%d_%H%M}.pdf",
+                    file_name=pdf_filename,
                     mime="application/pdf",
                     use_container_width=True
                 )
@@ -515,10 +540,13 @@ def main():
             buf_excel = BytesIO()
             with pd.ExcelWriter(buf_excel, engine="openpyxl") as writer:
                 df[display_cols].to_excel(writer, index=False, sheet_name="Hasil_Analisis")
+            
+            # Nama file Excel mengikuti nama file asli yang diunggah
+            excel_filename = f"Analisis_{base_name}_{datetime.now():%Y%m%d_%H%M}.xlsx"
             st.download_button(
                 "📊 Download Laporan Excel (.xlsx)",
                 data=buf_excel.getvalue(),
-                file_name=f"Analisis_Laporan_{datetime.now():%Y%m%d_%H%M}.xlsx",
+                file_name=excel_filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
