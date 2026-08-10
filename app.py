@@ -72,7 +72,6 @@ def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
 
     df = df_raw.copy()
     
-    # Deteksi apakah ini file jurnal standar atau nominatif
     cols_lower = [str(c).strip().lower() for c in df.columns]
     is_nominatif = not any("kred" in c or "credit" in c or "keluar" in c for c in cols_lower)
 
@@ -134,7 +133,6 @@ def process_uploaded_file(uploaded_file) -> pd.DataFrame:
 
     if fname.endswith((".xlsx", ".xls")):
         try:
-            # Baca file Excel dengan header di baris pertama
             df_ex = pd.read_excel(BytesIO(file_bytes), header=0)
             if len(df_ex.columns) >= 7:
                 df_ex = df_ex.iloc[:, :7]
@@ -256,7 +254,6 @@ def compute_jurnal(df: pd.DataFrame):
         }
         return df, totals
 
-    # Pastikan ffill aktif berdasarkan patokan No. Bukti
     df[kd_col] = df[kd_col].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("JU")
     df[bukti_col] = df[bukti_col].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("UNASSIGNED")
     df[uraian_col] = df[uraian_col].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("")
@@ -269,34 +266,17 @@ def compute_jurnal(df: pd.DataFrame):
 
     def get_smart_diff_reason(group_key):
         g_df = df[df["_Bukti_Group"] == group_key]
-        d_sum = g_df[debet_col].sum()
-        k_sum = g_df[kredit_col].sum()
+        d_sum = round(g_df[debet_col].sum(), 2)
+        k_sum = round(g_df[kredit_col].sum(), 2)
         g_diff = round(d_sum - k_sum, 2)
 
         notes = []
-        if abs(g_diff) >= 0.01:
-            kas_keywords = ["kas", "bank", "teller", "cimb", "bri", "bni", "mandiri"]
-            cash_debet = 0.0
-            cash_kredit = 0.0
-
-            for _, row in g_df.iterrows():
-                row_text = str(row.get(nama_col, "")).lower() + " " + str(row.get(uraian_col, "")).lower()
-                if any(k in row_text for k in kas_keywords):
-                    cash_debet += float(row.get(debet_col, 0.0))
-                    cash_kredit += float(row.get(kredit_col, 0.0))
-
-            if cash_kredit > cash_debet:
-                tipe_arus = "Uang Keluar (Pengeluaran Kas)"
-            elif cash_debet > cash_kredit:
-                tipe_arus = "Uang Masuk (Penerimaan Kas)"
-            else:
-                tipe_arus = "Transaksi Non-Kas"
-
+        # Toleransi selisih 1 Rupiah untuk pembulatan
+        if abs(g_diff) >= 1.0:
             if g_diff > 0:
-                notes.append(f"Selisih [{tipe_arus}]: Debet kelebihan {rupiah(g_diff)}")
+                notes.append(f"Debet kelebihan {rupiah(g_diff)}")
             else:
-                notes.append(f"Selisih [{tipe_arus}]: Kredit kelebihan {rupiah(abs(g_diff))}")
-
+                notes.append(f"Kredit kelebihan {rupiah(abs(g_diff))}")
         return " | ".join(notes)
 
     group_totals["_Penyebab_Selisih"] = group_totals.index.map(get_smart_diff_reason)
@@ -307,7 +287,7 @@ def compute_jurnal(df: pd.DataFrame):
         "total_debet": total_debet,
         "total_kredit": total_kredit,
         "selisih": diff,
-        "balanced": abs(diff) < 0.01 and (group_totals["_Group_Diff"].abs() < 0.01).all(),
+        "balanced": abs(diff) < 1.0 and (group_totals["_Group_Diff"].abs() < 1.0).all(),
         "mode": "jurnal"
     }
     return df, totals
@@ -377,7 +357,7 @@ def build_pdf_report(df, totals, report_name=""):
     ]
 
     for idx, r in df.iterrows():
-        is_bad = not is_nominatif and abs(r.get("_Selisih_Bukti", 0)) > 0.01
+        is_bad = not is_nominatif and abs(r.get("_Selisih_Bukti", 0)) >= 1.0
         curr_style = td_red if is_bad else td_style
         
         if is_bad:
@@ -522,7 +502,7 @@ def main():
         st.subheader("④ Tabel Rincian Data (Patokan No. Bukti)")
 
         def highlight_unbalanced_voucher(row):
-            if not is_nominatif and abs(row.get("_Selisih_Bukti", 0)) > 0.01:
+            if not is_nominatif and abs(row.get("_Selisih_Bukti", 0)) >= 1.0:
                 return ['background-color: #FEE2E2; color: #991B1B; font-weight: bold;'] * len(row)
             return [''] * len(row)
 
