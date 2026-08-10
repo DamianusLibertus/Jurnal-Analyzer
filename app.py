@@ -90,7 +90,7 @@ def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
             col_map[c] = "Debet"
         elif "kred" in cl or "keluar" in cl or "credit" in cl or cl == "k": 
             col_map[c] = "Kredit"
-        elif "saldo" in cl or "jumlah" in cl or "total" in cl:
+        elif "saldo" in cl or "jumlah" in cl or "total" in cl or "nilai" in cl:
             col_map[c] = "Debet"
 
     df = df.rename(columns=col_map)
@@ -203,28 +203,33 @@ def push_history(df):
     st.session_state.history.append(df.copy())
     st.session_state.history_idx = len(st.session_state.history) - 1
 
-# ---------- FUNGSI UTAMA ANALISIS JURNAL & DETEKSI SELISIH ----------
+# ---------- FUNGSI UTAMA ANALISIS JURNAL & DETEKSI SELISIH (FLEKSIBEL) ----------
 def compute_jurnal(df: pd.DataFrame):
     df = df.copy()
     
-    debet_col = next((c for c in df.columns if "deb" in str(c).lower()), "Debet")
-    kredit_col = next((c for c in df.columns if "kred" in str(c).lower()), "Kredit")
+    # Deteksi kolom nominal secara fleksibel (mencakup Debet, Saldo, Jumlah, Nilai)
+    debet_col = next((c for c in df.columns if any(k in str(c).lower() for k in ["deb", "saldo", "jumlah", "nilai"])), None)
+    if not debet_col:
+        debet_col = "Debet" if "Debet" in df.columns else df.columns[5] if len(df.columns) > 5 else df.columns[-2]
+
+    kredit_col = next((c for c in df.columns if any(k in str(c).lower() for k in ["kred", "credit", "keluar"])), None)
+    if not kredit_col:
+        kredit_col = "Kredit" if "Kredit" in df.columns else df.columns[-1]
+
     bukti_col = next((c for c in df.columns if "bukti" in str(c).lower() or "ref" in str(c).lower()), None)
 
+    # Pastikan kolom terdeteksi dengan benar dan diubah jadi angka
     if debet_col in df.columns:
         df[debet_col] = df[debet_col].apply(to_num)
-    else:
-        df["Debet"] = 0.0
-        debet_col = "Debet"
-
-    if kredit_col in df.columns:
+    if kredit_col in df.columns and kredit_col != debet_col:
         df[kredit_col] = df[kredit_col].apply(to_num)
     else:
-        df["Kredit"] = 0.0
+        if "Kredit" not in df.columns:
+            df["Kredit"] = 0.0
         kredit_col = "Kredit"
 
     total_debet = float(df[debet_col].sum())
-    total_kredit = float(df[kredit_col].sum())
+    total_kredit = float(df[kredit_col].sum() if kredit_col in df.columns else 0.0)
     diff = round(total_debet - total_kredit, 2)
 
     if bukti_col and bukti_col in df.columns:
@@ -309,7 +314,8 @@ def build_pdf_report(df, totals, report_name=""):
         row_cells = []
         for col in display_cols:
             val = r.get(col, "")
-            if "deb" in col.lower() or "kred" in col.lower():
+            # Format rupiah jika kolom berisi angka nominal
+            if any(k in col.lower() for k in ["deb", "kred", "saldo", "jumlah", "nilai"]):
                 val_num = to_num(val)
                 cell_text = rupiah(val_num)
             else:
@@ -324,7 +330,7 @@ def build_pdf_report(df, totals, report_name=""):
 
     t_detail = Table(rows_table, colWidths=col_widths, repeatRows=1)
     t_detail.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), navy),
+        ('BACKGROUND', (0,0), (-1,-1), navy),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
         ('BOTTOMPADDING', (0,0), (-1,-1), 4),
@@ -448,7 +454,7 @@ def main():
         styled_df = df[display_cols].style.apply(
             highlight_unbalanced_voucher, axis=1
         ).format({
-            c: "{:,.2f}" for c in display_cols if "deb" in c.lower() or "kred" in c.lower()
+            c: "{:,.2f}" for c in display_cols if any(k in c.lower() for k in ["deb", "kred", "saldo", "jumlah", "nilai"])
         }, na_rep="")
 
         st.dataframe(styled_df, use_container_width=True)
