@@ -7,9 +7,6 @@
 import os
 import re
 import io
-import json
-import uuid
-import base64
 from io import BytesIO
 from datetime import datetime
 
@@ -88,9 +85,9 @@ def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
             col_map[c] = "Nama Perkiraan"
         elif "uraian" in cl or "keterangan" in cl or "memo" in cl or "alamat" in cl or "kecamatan" in cl: 
             col_map[c] = "Uraian"
-        elif "deb" in cl or "masuk" in cl or "debit" in cl or cl == "d": 
+        elif cl in ["debet", "debit", "deb", "d"]: 
             col_map[c] = "Debet"
-        elif "kred" in cl or "keluar" in cl or "credit" in cl or cl == "k": 
+        elif cl in ["kredit", "kred", "k"]: 
             col_map[c] = "Kredit"
         elif is_nominatif and ("saldo" in cl or "jumlah" in cl or "total" in cl or "nilai" in cl or "pokok" in cl or "jasa" in cl):
             col_map[c] = "Debet"
@@ -271,7 +268,6 @@ def compute_jurnal(df: pd.DataFrame):
         g_diff = round(d_sum - k_sum, 2)
 
         notes = []
-        # Toleransi selisih 1 Rupiah untuk pembulatan
         if abs(g_diff) >= 1.0:
             if g_diff > 0:
                 notes.append(f"Debet kelebihan {rupiah(g_diff)}")
