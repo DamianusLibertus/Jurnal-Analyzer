@@ -183,11 +183,21 @@ def process_uploaded_file(uploaded_file) -> pd.DataFrame:
 
     return pd.DataFrame(columns=STD_COLS)
 
-# ---------- HITUNG ANALISIS & DETEKSI SELISIH ----------
+# ---------- MANAJEMEN RIWAYAT (UNDO / REDO) ----------
+def init_history(df):
+    if "history" not in st.session_state:
+        st.session_state.history = [df.copy()]
+        st.session_state.history_idx = 0
+
+def push_history(df):
+    st.session_state.history = st.session_state.history[:st.session_state.history_idx + 1]
+    st.session_state.history.append(df.copy())
+    st.session_state.history_idx = len(st.session_state.history) - 1
+
+# ---------- HITUNG ANALISIS & DETEKSI SELISIH + PENYEBAB ----------
 def compute_jurnal(df: pd.DataFrame):
     df = df.copy()
     
-    # Ambil kolom Debet & Kredit secara dinamis berdasarkan nama kolom yang ada
     debet_col = next((c for c in df.columns if "deb" in str(c).lower()), "Debet")
     kredit_col = next((c for c in df.columns if "kred" in str(c).lower()), "Kredit")
     bukti_col = next((c for c in df.columns if "bukti" in str(c).lower() or "ref" in str(c).lower()), None)
@@ -208,14 +218,25 @@ def compute_jurnal(df: pd.DataFrame):
     total_kredit = float(df[kredit_col].sum())
     diff = round(total_debet - total_kredit, 2)
 
-    # Deteksi Selisih Per Nomor Bukti
     if bukti_col and bukti_col in df.columns:
         df["_Bukti_Group"] = df[bukti_col].astype(str).replace("", None).ffill().fillna("UNASSIGNED")
         group_totals = df.groupby("_Bukti_Group")[[debet_col, kredit_col]].sum()
         group_totals["_Group_Diff"] = (group_totals[debet_col] - group_totals[kredit_col]).round(2)
+        
+        def get_diff_reason(row_diff):
+            if abs(row_diff) < 0.01:
+                return "Seimbang (Normal)"
+            elif row_diff > 0:
+                return f"Tidak Seimbang: Debet kelebihan {rupiah(abs(row_diff))}"
+            else:
+                return f"Tidak Seimbang: Kredit kelebihan {rupiah(abs(row_diff))}"
+
+        group_totals["_Penyebab_Selisih"] = group_totals["_Group_Diff"].apply(get_diff_reason)
         df["_Selisih_Bukti"] = df["_Bukti_Group"].map(group_totals["_Group_Diff"])
+        df["Penyebab Selisih"] = df["_Bukti_Group"].map(group_totals["_Penyebab_Selisih"])
     else:
         df["_Selisih_Bukti"] = 0.0
+        df["Penyebab Selisih"] = "Seimbang / Tanpa Group Bukti"
 
     totals = {
         "total_debet": total_debet,
@@ -225,8 +246,8 @@ def compute_jurnal(df: pd.DataFrame):
     }
     return df, totals
 
-# ---------- EKSPOR PDF REPORTLAB (DINAMIS & LANSKAP) ----------
-def build_pdf_report(df, totals):
+# ---------- EKSPOR PDF REPORTLAB (DINAMIS, LANSKAP, & INFO LAPORAN) ----------
+def build_pdf_report(df, totals, report_name=""):
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib import colors
     from reportlab.lib.units import mm
@@ -247,10 +268,10 @@ def build_pdf_report(df, totals):
     td_red = ParagraphStyle("TDR", parent=styles["Normal"], fontSize=7.5, leading=9, textColor=colors.HexColor("#DC2626"), fontName="Helvetica-Bold")
 
     elements.append(Paragraph(f"<b>{APP_TITLE}</b>", title_style))
-    elements.append(Paragraph(f"Pemilik: {OWNER} | Tanggal Cetak: {datetime.now().strftime('%d-%m-%Y %H:%M WIB')}", sub_style))
+    info_teks = f"Pemilik: {OWNER} | Sumber Laporan: <b>{report_name}</b> | Tanggal Cetak: {datetime.now().strftime('%d-%m-%Y %H:%M WIB')}"
+    elements.append(Paragraph(info_teks, sub_style))
     elements.append(Spacer(1, 6))
 
-    # Ringkasan Total
     summary_data = [
         [Paragraph("<b>Total Debet</b>", th_style), Paragraph("<b>Total Kredit</b>", th_style), Paragraph("<b>Selisih Total</b>", th_style), Paragraph("<b>Status Jurnal</b>", th_style)],
         [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph("<b>SEIMBANG</b>" if totals["balanced"] else "<font color='red'><b>TIDAK SEIMBANG</b></font>", td_style)]
@@ -265,7 +286,6 @@ def build_pdf_report(df, totals):
     elements.append(t_sum)
     elements.append(Spacer(1, 8))
 
-    # AMBIL KOLOM AKTIF SESUAI YANG TAMPIL DI PRATINJAU (DINAMIS)
     display_cols = [c for c in df.columns if not c.startswith("_")]
     headers = [Paragraph(f"<b>{c}</b>", th_style) for c in display_cols]
     rows_table = [headers]
@@ -277,7 +297,6 @@ def build_pdf_report(df, totals):
         row_cells = []
         for col in display_cols:
             val = r.get(col, "")
-            # Format jika kolom Debet / Kredit
             if "deb" in col.lower() or "kred" in col.lower():
                 val_num = to_num(val)
                 cell_text = rupiah(val_num)
@@ -287,9 +306,8 @@ def build_pdf_report(df, totals):
             
         rows_table.append(row_cells)
 
-    # Lebar kolom otomatis proporsional berdasarkan jumlah kolom yang aktif
     num_cols = len(display_cols)
-    page_width = 275 * mm # Lebar efektif A4 lanskap
+    page_width = 275 * mm
     col_widths = [page_width / num_cols] * num_cols
 
     t_detail = Table(rows_table, colWidths=col_widths, repeatRows=1)
@@ -327,35 +345,56 @@ def main():
                     all_frames.append(parsed_df)
 
             if all_frames:
-                st.session_state.df_raw = pd.concat(all_frames, ignore_index=True)
+                combined_df = pd.concat(all_frames, ignore_index=True)
+                st.session_state.df_raw = combined_df
+                st.session_state.uploaded_file_name = ", ".join([f.name for f in up_files])
+                init_history(combined_df)
                 st.success("Data berhasil diekstrak dan disesuaikan otomatis!")
             else:
                 st.error("Gagal membaca dokumen. Pastikan format tabel memiliki kolom yang sesuai.")
 
     if "df_raw" in st.session_state and st.session_state.df_raw is not None:
+        init_history(st.session_state.df_raw)
+
         st.subheader("② Pratinjau Data Tabel Hasil Ekstraksi")
 
-        # PANEL PENGATURAN KOLOM (TAMBAH, HAPUS, & GANTI NAMA KOLOM)
-        with st.expander("🛠️ Panel Alat Pengaturan & Edit Nama Kolom Tabel", expanded=False):
+        with st.expander("🛠️ Panel Alat Pengaturan, Edit Kolom, & Undo/Redo", expanded=True):
+            col_ur1, col_ur2, col_space = st.columns([1, 1, 4])
+            with col_ur1:
+                if st.button("↩️ Undo (Batalkan)", disabled=(st.session_state.history_idx <= 0)):
+                    st.session_state.history_idx -= 1
+                    st.session_state.df_raw = st.session_state.history[st.session_state.history_idx].copy()
+                    st.rerun()
+            with col_ur2:
+                if st.button("↪️ Redo (Ulangi)", disabled=(st.session_state.history_idx >= len(st.session_state.history) - 1)):
+                    st.session_state.history_idx += 1
+                    st.session_state.df_raw = st.session_state.history[st.session_state.history_idx].copy()
+                    st.rerun()
+
+            st.divider()
+
             col_a, col_b, col_c = st.columns(3)
             with col_a:
                 new_col = st.text_input("Nama Kolom Baru:")
                 if st.button("➕ Tambah Kolom"):
                     if new_col and new_col not in st.session_state.df_raw.columns:
                         st.session_state.df_raw[new_col] = ""
+                        push_history(st.session_state.df_raw)
                         st.rerun()
             with col_b:
                 target_col = st.selectbox("Pilih Kolom Diedit:", st.session_state.df_raw.columns, key="target_rename")
-                new_name = st.text_input("Nama Baru Kolom:")
-                if st.button("✏️ Ubah Nama Kolom"):
-                    if new_name and target_col:
+                new_name = st.text_input("Ubah Nama Kolom Menjadi:")
+                if st.button("✏️ Ganti Nama Kolom"):
+                    if new_name and target_col and new_name != target_col:
                         st.session_state.df_raw = st.session_state.df_raw.rename(columns={target_col: new_name})
+                        push_history(st.session_state.df_raw)
                         st.rerun()
             with col_c:
                 del_col = st.selectbox("Pilih Kolom Dihapus:", st.session_state.df_raw.columns, key="target_delete")
                 if st.button("🗑️ Hapus Kolom"):
                     if len(st.session_state.df_raw.columns) > 1:
                         st.session_state.df_raw = st.session_state.df_raw.drop(columns=[del_col])
+                        push_history(st.session_state.df_raw)
                         st.rerun()
 
         edited_df = st.data_editor(
@@ -367,6 +406,7 @@ def main():
 
         if st.button("🔒 Kunci Data & Cari Selisih Otomatis", type="primary"):
             st.session_state.df_raw = edited_df
+            push_history(edited_df)
             computed_df, totals = compute_jurnal(edited_df)
             st.session_state.computed_df = computed_df
             st.session_state.totals = totals
@@ -407,9 +447,10 @@ def main():
 
         with e1:
             try:
-                pdf_bytes = build_pdf_report(df, totals)
+                current_file_label = st.session_state.get("uploaded_file_name", "Dokumen Jurnal")
+                pdf_bytes = build_pdf_report(df, totals, report_name=current_file_label)
                 st.download_button(
-                    "🖨️ Cetak / Download Laporan PDF (Lanskap & Sinkron)",
+                    "🖨️ Cetak / Download Laporan PDF (Lanskap & Info Lengkap)",
                     data=pdf_bytes,
                     file_name=f"Laporan_Selisih_Jurnal_{datetime.now():%Y%m%d_%H%M}.pdf",
                     mime="application/pdf",
@@ -423,7 +464,7 @@ def main():
             with pd.ExcelWriter(buf_excel, engine="openpyxl") as writer:
                 df[display_cols].to_excel(writer, index=False, sheet_name="Hasil_Analisis")
             st.download_button(
-                "📊 Download Laporan Excel (.xlsx)",
+                "📊 Download Laporan Excel (.xlsx dengan Catatan Selisih)",
                 data=buf_excel.getvalue(),
                 file_name=f"Analisis_Jurnal_{datetime.now():%Y%m%d_%H%M}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
