@@ -195,9 +195,17 @@ def process_uploaded_file(uploaded_file) -> pd.DataFrame:
 
     return pd.DataFrame(columns=STD_COLS)
 
-# ---------- HITUNG ANALISIS & DETEKSI SELISIH TRANSAKSI ----------
+# ---------- HITUNG ANALISIS & DETEKSI SELISIH TRANSAKSI (DENGAN PENGAMAN KOLOM) ----------
 def compute_jurnal(df: pd.DataFrame):
     df = df.copy()
+    
+    # --- PENGAMAN TAMBAHAN: Mencegah KeyError jika kolom wajib terhapus user ---
+    required_cols = ["KD", "No. Bukti", "Kode Perkiraan", "Nama Perkiraan", "Uraian", "Debet", "Kredit"]
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = 0.0 if col in ["Debet", "Kredit"] else ""
+    # --------------------------------------------------------------------------
+
     df["Debet"] = df["Debet"].apply(to_num)
     df["Kredit"] = df["Kredit"].apply(to_num)
 
@@ -206,7 +214,7 @@ def compute_jurnal(df: pd.DataFrame):
     diff = round(total_debet - total_kredit, 2)
 
     # Deteksi Selisih Per Nomor Bukti (Voucher / Pasangan Transaksi)
-    df["_Bukti_Group"] = df["No. Bukti"].replace("", None).ffill().fillna("UNASSIGNED")
+    df["_Bukti_Group"] = df["No. Bukti"].astype(str).replace("", None).ffill().fillna("UNASSIGNED")
     
     # Hitung total per bukti
     group_totals = df.groupby("_Bukti_Group")[["Debet", "Kredit"]].sum()
