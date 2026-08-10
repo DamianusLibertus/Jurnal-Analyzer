@@ -205,7 +205,7 @@ def push_history(df):
     st.session_state.history.append(df.copy())
     st.session_state.history_idx = len(st.session_state.history) - 1
 
-# ---------- FUNGSI ANALISIS (ANALISIS ARUS KAS & POSISI JURNAL) ----------
+# ---------- FUNGSI ANALISIS (CEK SELISIH + URAIAN KOSONG) ----------
 def compute_jurnal(df: pd.DataFrame):
     df = df.copy()
     
@@ -216,6 +216,7 @@ def compute_jurnal(df: pd.DataFrame):
     kredit_col = next((c for c in df.columns if any(k in str(c).lower() for k in ["kred", "credit", "keluar"])), "Kredit")
     bukti_col = next((c for c in df.columns if "bukti" in str(c).lower() or "ref" in str(c).lower()), None)
     nama_col = next((c for c in df.columns if "nama" in str(c).lower() or "perkiraan" in str(c).lower() or "akun" in str(c).lower()), "Nama Perkiraan")
+    uraian_col = next((c for c in df.columns if "uraian" in str(c).lower() or "keterangan" in str(c).lower()), "Uraian")
 
     if debet_col in df.columns:
         df[debet_col] = df[debet_col].apply(to_num)
@@ -242,51 +243,76 @@ def compute_jurnal(df: pd.DataFrame):
         return df, totals
 
     diff = round(total_debet - total_kredit, 2)
+    
+    # Hitung selisih per group bukti terlebih dahulu
     if bukti_col and bukti_col in df.columns:
         df["_Bukti_Group"] = df[bukti_col].astype(str).replace("", None).ffill().fillna("UNASSIGNED")
         group_totals = df.groupby("_Bukti_Group")[[debet_col, kredit_col]].sum()
         group_totals["_Group_Diff"] = (group_totals[debet_col] - group_totals[kredit_col]).round(2)
         
-        # Analisis Cerdas Posisi Uang Masuk / Keluar & Posisi Jurnal
         def get_smart_diff_reason(group_key):
             g_df = df[df["_Bukti_Group"] == group_key]
             d_sum = g_df[debet_col].sum()
             k_sum = g_df[kredit_col].sum()
             g_diff = round(d_sum - k_sum, 2)
 
-            if abs(g_diff) < 0.01:
-                return ""
+            notes = []
+            
+            # Cek Arus Kas / Posisi Jurnal jika ada selisih nilai
+            if abs(g_diff) >= 0.01:
+                kas_keywords = ["kas", "bank", "teller", "cimb", "bri", "bni", "mandiri"]
+                cash_debet = 0.0
+                cash_kredit = 0.0
 
-            # Cek apakah ada akun Kas / Bank / Teller yang terlibat dalam kelompok bukti ini
-            text_gabungan = " ".join(g_df[nama_col].astype(str) + " " + g_df.get("Uraian", "").astype(str)).lower()
-            ada_kas = any(k in text_gabungan for k in ["kas", "bank", "teller", "cimb", "bri", "bni", "mandiri"])
+                for _, row in g_df.iterrows():
+                    row_text = str(row.get(nama_col, "")).lower() + " " + str(row.get(uraian_col, "")).lower()
+                    if any(k in row_text for k in kas_keywords):
+                        cash_debet += float(row.get(debet_col, 0.0))
+                        cash_kredit += float(row.get(kredit_col, 0.0))
 
-            if g_diff > 0:
-                if ada_kas:
-                    return f"Selisih: Debet kelebihan {rupiah(g_diff)} (Posisi Kas Masuk/Penerimaan tidak seimbang dengan alokasi kredit)"
+                if cash_kredit > cash_debet:
+                    tipe_arus = "Uang Keluar (Pengeluaran Kas)"
+                elif cash_debet > cash_kredit:
+                    tipe_arus = "Uang Masuk (Penerimaan Kas)"
                 else:
-                    return f"Selisih: Debet kelebihan {rupiah(g_diff)} (Posisi Jurnal Alokasi Biaya/Aset lebih besar dari sumber dana)"
-            else:
-                if ada_kas:
-                    return f"Selisih: Kredit kelebihan {rupiah(abs(g_diff))} (Posisi Kas Keluar/Pengeluaran tidak berimbang dengan rincian beban)"
+                    tipe_arus = "Transaksi Non-Kas"
+
+                if g_diff > 0:
+                    notes.append(f"Selisih [{tipe_arus}]: Debet kelebihan {rupiah(g_diff)}")
                 else:
-                    return f"Selisih: Kredit kelebihan {rupiah(abs(g_diff))} (Posisi Jurnal Pendapatan/Sumber lebih besar dari penempatan)"
+                    notes.append(f"Selisih [{tipe_arus}]: Kredit kelebihan {rupiah(abs(g_diff))}")
+
+            return " | ".join(notes)
 
         group_totals["_Penyebab_Selisih"] = group_totals.index.map(get_smart_diff_reason)
         df["_Selisih_Bukti"] = df["_Bukti_Group"].map(group_totals["_Group_Diff"])
         df["Penyebab Selisih"] = df["_Bukti_Group"].map(group_totals["_Penyebab_Selisih"])
     else:
         df["_Selisih_Bukti"] = 0.0
-        if abs(diff) < 0.01:
-            df["Penyebab Selisih"] = ""
-        else:
-            df["Penyebab Selisih"] = f"Total Selisih: {rupiah(abs(diff))} (Posisi Total Debet & Kredit tidak match)"
+        df["Penyebab Selisih"] = ""
+
+    # TAMBAHAN KONTROL KUALITAS: Ingatkan jika kolom Uraian kosong/tanpa keterangan pada baris rincian
+    for idx, r in df.iterrows():
+        uraian_val = str(r.get(uraian_col, "")).strip()
+        current_msg = str(r.get("Penyebab Selisih", ""))
+        
+        # Jika uraian kosong
+        if uraian_val == "":
+            warning_text = "⚠️ Perhatian: Kolom Uraian Kosong (Tanpa Keterangan)"
+            if current_msg:
+                df.at[idx, "Penyebab Selisih"] = f"{current_msg} | {warning_text}"
+            else:
+                df.at[idx, "Penyebab Selisih"] = warning_text
+            
+            # Agar baris ini ikut tersorot merah sebagai tanda audit kelengkapan data
+            if abs(df.at[idx, "_Selisih_Bukti"]) < 0.01:
+                df.at[idx, "_Selisih_Bukti"] = 999.0 # Paksa tandai baris untuk audit
 
     totals = {
         "total_debet": total_debet,
         "total_kredit": total_kredit,
         "selisih": diff,
-        "balanced": abs(diff) < 0.01,
+        "balanced": abs(diff) < 0.01 and not any("Kosong" in str(x) for x in df["Penyebab Selisih"]),
         "mode": "jurnal"
     }
     return df, totals
@@ -330,7 +356,7 @@ def build_pdf_report(df, totals, report_name=""):
     else:
         summary_data = [
             [Paragraph("<b>Total Debet</b>", th_style), Paragraph("<b>Total Kredit</b>", th_style), Paragraph("<b>Selisih Total</b>", th_style), Paragraph("<b>Status Jurnal</b>", th_style)],
-            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph("<b>SEIMBANG</b>" if totals["balanced"] else "<font color='red'><b>TIDAK SEIMBANG</b></font>", td_style)]
+            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph("<b>SEIMBANG & LENGKAP</b>" if totals["balanced"] else "<font color='red'><b>PERLU PERHATIAN (SELISIH / URAIAN KOSONG)</b></font>", td_style)]
         ]
         t_sum = Table(summary_data, colWidths=[65*mm, 65*mm, 65*mm, 60*mm])
 
@@ -356,7 +382,7 @@ def build_pdf_report(df, totals, report_name=""):
     ]
 
     for idx, r in df.iterrows():
-        is_bad = not is_nominatif and abs(r.get("_Selisih_Bukti", 0)) > 0.01
+        is_bad = not is_nominatif and (abs(r.get("_Selisih_Bukti", 0)) > 0.01 or "Kosong" in str(r.get("Penyebab Selisih", "")))
         curr_style = td_red if is_bad else td_style
         
         if is_bad:
@@ -411,7 +437,6 @@ def main():
             if all_frames:
                 combined_df = pd.concat(all_frames, ignore_index=True)
                 st.session_state.df_raw = combined_df
-                # Simpan nama file asli tanpa ekstensi untuk penamaan file download yang rapi
                 raw_fname = up_files[0].name
                 st.session_state.uploaded_file_name = raw_fname
                 st.session_state.file_base_name = os.path.splitext(raw_fname)[0]
@@ -497,12 +522,12 @@ def main():
             c1.metric("Total Debet", rupiah(totals["total_debet"]))
             c2.metric("Total Kredit", rupiah(totals["total_kredit"]))
             c3.metric("Selisih Total", rupiah(totals["selisih"]))
-            c4.metric("Status Jurnal", "SEIMBANG ✅" if totals["balanced"] else "TIDAK SEIMBANG ⚠️")
+            c4.metric("Status Jurnal", "SEIMBANG & LENGKAP ✅" if totals["balanced"] else "PERHATIAN ⚠️")
 
-        st.subheader("④ Tabel Rincian Data")
+        st.subheader("④ Tabel Rincian Data (Peringatan Uraian Kosong & Selisih)")
 
         def highlight_unbalanced_voucher(row):
-            if not is_nominatif and abs(row.get("_Selisih_Bukti", 0)) > 0.01:
+            if not is_nominatif and (abs(row.get("_Selisih_Bukti", 0)) > 0.01 or "Kosong" in str(row.get("Penyebab Selisih", ""))):
                 return ['background-color: #FEE2E2; color: #991B1B; font-weight: bold;'] * len(row)
             return [''] * len(row)
 
@@ -524,7 +549,6 @@ def main():
                 current_file_label = st.session_state.get("uploaded_file_name", "Dokumen Laporan")
                 pdf_bytes = build_pdf_report(df, totals, report_name=current_file_label)
                 
-                # Nama file PDF mengikuti nama file asli yang diunggah
                 pdf_filename = f"Analisis_{base_name}_{datetime.now():%Y%m%d_%H%M}.pdf"
                 st.download_button(
                     "🖨️ Cetak / Download Laporan PDF (Lanskap & Info Lengkap)",
@@ -541,7 +565,6 @@ def main():
             with pd.ExcelWriter(buf_excel, engine="openpyxl") as writer:
                 df[display_cols].to_excel(writer, index=False, sheet_name="Hasil_Analisis")
             
-            # Nama file Excel mengikuti nama file asli yang diunggah
             excel_filename = f"Analisis_{base_name}_{datetime.now():%Y%m%d_%H%M}.xlsx"
             st.download_button(
                 "📊 Download Laporan Excel (.xlsx)",
