@@ -72,8 +72,9 @@ def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
 
     df = df_raw.copy()
     
+    # Deteksi apakah ini file jurnal standar atau nominatif
     cols_lower = [str(c).strip().lower() for c in df.columns]
-    is_nominatif = not any("deb" in c or "kred" in c for c in cols_lower)
+    is_nominatif = not any("kred" in c or "credit" in c or "keluar" in c for c in cols_lower)
 
     col_map = {}
     for c in df.columns:
@@ -102,7 +103,17 @@ def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
             df[col] = ""
 
     df = df[STD_COLS].copy()
+    
+    # Hapus baris penanda tanggal atau baris kosong total
+    df = df[~df['KD'].astype(str).str.contains('TANGGAL', na=False)]
+    df = df.dropna(subset=['Kode Perkiraan'], how='all')
+
     df = df.replace({'nan': '', 'NaN': '', np.nan: ''})
+
+    # Forward fill patokan utama No. Bukti, KD, dan Uraian untuk baris lanjutan
+    df["KD"] = df["KD"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("JU")
+    df["No. Bukti"] = df["No. Bukti"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("UNASSIGNED")
+    df["Uraian"] = df["Uraian"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("")
 
     df["Debet"] = df["Debet"].apply(to_num)
     df["Kredit"] = df["Kredit"].apply(to_num)
@@ -110,8 +121,6 @@ def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     def is_valid_row(r):
         str_val = (str(r["KD"]) + str(r["No. Bukti"]) + str(r["Nama Perkiraan"]) + str(r["Uraian"])).lower().replace(" ", "")
         if any(k in str_val for k in ["total", "jumlah", "sanggau", "saldoawal", "saldoakhir", "halaman"]):
-            return False
-        if r["Debet"] == 0 and r["Kredit"] == 0 and str(r["Nama Perkiraan"]).strip() == "" and str(r["No. Bukti"]).strip() == "":
             return False
         return True
 
@@ -125,8 +134,8 @@ def process_uploaded_file(uploaded_file) -> pd.DataFrame:
 
     if fname.endswith((".xlsx", ".xls")):
         try:
-            # Lewati 2 baris pertama jika header ada di baris ke-3 (sesuai struktur standar jurnal)
-            df_ex = pd.read_excel(BytesIO(file_bytes), skiprows=2)
+            # Baca file Excel dengan header di baris pertama
+            df_ex = pd.read_excel(BytesIO(file_bytes), header=0)
             if len(df_ex.columns) >= 7:
                 df_ex = df_ex.iloc[:, :7]
                 df_ex.columns = STD_COLS
@@ -247,7 +256,7 @@ def compute_jurnal(df: pd.DataFrame):
         }
         return df, totals
 
-    # Forward fill KD, No. Bukti, dan Uraian berdasarkan patokan No. Bukti
+    # Pastikan ffill aktif berdasarkan patokan No. Bukti
     df[kd_col] = df[kd_col].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("JU")
     df[bukti_col] = df[bukti_col].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("UNASSIGNED")
     df[uraian_col] = df[uraian_col].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("")
@@ -293,18 +302,6 @@ def compute_jurnal(df: pd.DataFrame):
     group_totals["_Penyebab_Selisih"] = group_totals.index.map(get_smart_diff_reason)
     df["_Selisih_Bukti"] = df["_Bukti_Group"].map(group_totals["_Group_Diff"])
     df["Penyebab Selisih"] = df["_Bukti_Group"].map(group_totals["_Penyebab_Selisih"])
-
-    # Kontrol kualitas: Deteksi jika ada baris dengan Uraian kosong
-    for idx, r in df.iterrows():
-        uraian_val = str(r.get(uraian_col, "")).strip()
-        current_msg = str(r.get("Penyebab Selisih", ""))
-        
-        if uraian_val == "":
-            warning_text = "⚠️ Perhatian: Kolom Uraian Kosong (Tanpa Keterangan)"
-            if current_msg:
-                df.at[idx, "Penyebab Selisih"] = f"{current_msg} | {warning_text}"
-            else:
-                df.at[idx, "Penyebab Selisih"] = warning_text
 
     totals = {
         "total_debet": total_debet,
@@ -354,7 +351,7 @@ def build_pdf_report(df, totals, report_name=""):
     else:
         summary_data = [
             [Paragraph("<b>Total Debet</b>", th_style), Paragraph("<b>Total Kredit</b>", th_style), Paragraph("<b>Selisih Total</b>", th_style), Paragraph("<b>Status Jurnal</b>", th_style)],
-            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph("<b>SEIMBANG & LENGKAP</b>" if totals["balanced"] else "<font color='red'><b>PERHATIAN (ADA SELISIH / URAIAN KOSONG)</b></font>", td_style)]
+            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph("<b>SEIMBANG & LENGKAP</b>" if totals["balanced"] else "<font color='red'><b>PERHATIAN (ADA SELISIH)</b></font>", td_style)]
         ]
         t_sum = Table(summary_data, colWidths=[65*mm, 65*mm, 65*mm, 60*mm])
 
@@ -380,7 +377,7 @@ def build_pdf_report(df, totals, report_name=""):
     ]
 
     for idx, r in df.iterrows():
-        is_bad = not is_nominatif and (abs(r.get("_Selisih_Bukti", 0)) > 0.01 or "Kosong" in str(r.get("Penyebab Selisih", "")))
+        is_bad = not is_nominatif and abs(r.get("_Selisih_Bukti", 0)) > 0.01
         curr_style = td_red if is_bad else td_style
         
         if is_bad:
@@ -520,12 +517,12 @@ def main():
             c1.metric("Total Debet", rupiah(totals["total_debet"]))
             c2.metric("Total Kredit", rupiah(totals["total_kredit"]))
             c3.metric("Selisih Total", rupiah(totals["selisih"]))
-            c4.metric("Status Jurnal", "SEIMBANG & LENGKAP ✅" if totals["balanced"] else "PERHATIAN ⚠️")
+            c4.metric("Status Jurnal", "SEIMBANG ✅" if totals["balanced"] else "TIDAK SEIMBANG ⚠️")
 
         st.subheader("④ Tabel Rincian Data (Patokan No. Bukti)")
 
         def highlight_unbalanced_voucher(row):
-            if not is_nominatif and (abs(row.get("_Selisih_Bukti", 0)) > 0.01 or "Kosong" in str(row.get("Penyebab Selisih", ""))):
+            if not is_nominatif and abs(row.get("_Selisih_Bukti", 0)) > 0.01:
                 return ['background-color: #FEE2E2; color: #991B1B; font-weight: bold;'] * len(row)
             return [''] * len(row)
 
