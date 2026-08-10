@@ -73,7 +73,6 @@ def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
 
     df = df_raw.copy()
     
-    # Pemetaaan nama kolom otomatis
     col_map = {}
     for c in df.columns:
         cl = str(c).strip().lower()
@@ -87,27 +86,20 @@ def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
 
     df = df.rename(columns=col_map)
 
-    # Pastikan seluruh 7 kolom ada
     for col in STD_COLS:
         if col not in df.columns:
             df[col] = ""
 
     df = df[STD_COLS].copy()
-    
-    # Ganti seluruh string "nan", spasi kosong, atau NaN bawaan Pandas menjadi nilai kosong ""
     df = df.replace({'nan': '', 'NaN': '', np.nan: ''})
 
-    # Format Angka
     df["Debet"] = df["Debet"].apply(to_num)
     df["Kredit"] = df["Kredit"].apply(to_num)
 
-    # Buang baris rekap/total/sampah kosong
     def is_valid_row(r):
         str_val = (str(r["KD"]) + str(r["No. Bukti"]) + str(r["Nama Perkiraan"]) + str(r["Uraian"])).lower().replace(" ", "")
         if any(k in str_val for k in ["total", "jumlah", "sanggau", "saldoawal", "saldoakhir", "halaman"]):
             return False
-        
-        # Harus memiliki angka Debet/Kredit ATAU Nama Perkiraan ATAU No. Bukti
         if r["Debet"] == 0 and r["Kredit"] == 0 and str(r["Nama Perkiraan"]).strip() == "" and str(r["No. Bukti"]).strip() == "":
             return False
         return True
@@ -115,12 +107,11 @@ def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = df[df.apply(is_valid_row, axis=1)].reset_index(drop=True)
     return df
 
-# ---------- PROSES PEMBACAAN DOKUMEN (EXCEL, CSV, PDF) ----------
+# ---------- PROSES PEMBACAAN DOKUMEN ----------
 def process_uploaded_file(uploaded_file) -> pd.DataFrame:
     fname = uploaded_file.name.lower()
     file_bytes = uploaded_file.getvalue()
 
-    # 1. BACA FILE EXCEL (.xlsx, .xls)
     if fname.endswith((".xlsx", ".xls")):
         try:
             df_ex = pd.read_excel(BytesIO(file_bytes))
@@ -129,7 +120,6 @@ def process_uploaded_file(uploaded_file) -> pd.DataFrame:
             st.error(f"Gagal membaca file Excel: {e}")
             return pd.DataFrame(columns=STD_COLS)
 
-    # 2. BACA FILE CSV
     elif fname.endswith(".csv"):
         try:
             df_csv = pd.read_csv(BytesIO(file_bytes))
@@ -138,7 +128,6 @@ def process_uploaded_file(uploaded_file) -> pd.DataFrame:
             df_csv = pd.read_csv(BytesIO(file_bytes), sep=";")
             return clean_and_normalize_df(df_csv)
 
-    # 3. BACA FILE PDF
     elif fname.endswith(".pdf"):
         try:
             import pdfplumber
@@ -161,7 +150,6 @@ def process_uploaded_file(uploaded_file) -> pd.DataFrame:
                 if any(k in low for k in ["halaman", "jurnal transaksi", "periode", "total", "jumlah", "dicetak"]):
                     continue
 
-                # Cari nomor bukti
                 found_ref = ref_re.findall(line)
                 if found_ref:
                     curr_bukti = found_ref[0]
@@ -195,34 +183,40 @@ def process_uploaded_file(uploaded_file) -> pd.DataFrame:
 
     return pd.DataFrame(columns=STD_COLS)
 
-# ---------- HITUNG ANALISIS & DETEKSI SELISIH TRANSAKSI (DENGAN PENGAMAN KOLOM) ----------
+# ---------- HITUNG ANALISIS & DETEKSI SELISIH ----------
 def compute_jurnal(df: pd.DataFrame):
     df = df.copy()
     
-    # --- PENGAMAN TAMBAHAN: Mencegah KeyError jika kolom wajib terhapus user ---
-    required_cols = ["KD", "No. Bukti", "Kode Perkiraan", "Nama Perkiraan", "Uraian", "Debet", "Kredit"]
-    for col in required_cols:
-        if col not in df.columns:
-            df[col] = 0.0 if col in ["Debet", "Kredit"] else ""
-    # --------------------------------------------------------------------------
+    # Ambil kolom Debet & Kredit secara dinamis berdasarkan nama kolom yang ada
+    debet_col = next((c for c in df.columns if "deb" in str(c).lower()), "Debet")
+    kredit_col = next((c for c in df.columns if "kred" in str(c).lower()), "Kredit")
+    bukti_col = next((c for c in df.columns if "bukti" in str(c).lower() or "ref" in str(c).lower()), None)
 
-    df["Debet"] = df["Debet"].apply(to_num)
-    df["Kredit"] = df["Kredit"].apply(to_num)
+    if debet_col in df.columns:
+        df[debet_col] = df[debet_col].apply(to_num)
+    else:
+        df["Debet"] = 0.0
+        debet_col = "Debet"
 
-    total_debet = float(df["Debet"].sum())
-    total_kredit = float(df["Kredit"].sum())
+    if kredit_col in df.columns:
+        df[kredit_col] = df[kredit_col].apply(to_num)
+    else:
+        df["Kredit"] = 0.0
+        kredit_col = "Kredit"
+
+    total_debet = float(df[debet_col].sum())
+    total_kredit = float(df[kredit_col].sum())
     diff = round(total_debet - total_kredit, 2)
 
-    # Deteksi Selisih Per Nomor Bukti (Voucher / Pasangan Transaksi)
-    df["_Bukti_Group"] = df["No. Bukti"].astype(str).replace("", None).ffill().fillna("UNASSIGNED")
-    
-    # Hitung total per bukti
-    group_totals = df.groupby("_Bukti_Group")[["Debet", "Kredit"]].sum()
-    group_totals["_Group_Diff"] = (group_totals["Debet"] - group_totals["Kredit"]).round(2)
-    
-    # Gabungkan status selisih ke dataframe utama
-    df["_Selisih_Bukti"] = df["_Bukti_Group"].map(group_totals["_Group_Diff"])
-    
+    # Deteksi Selisih Per Nomor Bukti
+    if bukti_col and bukti_col in df.columns:
+        df["_Bukti_Group"] = df[bukti_col].astype(str).replace("", None).ffill().fillna("UNASSIGNED")
+        group_totals = df.groupby("_Bukti_Group")[[debet_col, kredit_col]].sum()
+        group_totals["_Group_Diff"] = (group_totals[debet_col] - group_totals[kredit_col]).round(2)
+        df["_Selisih_Bukti"] = df["_Bukti_Group"].map(group_totals["_Group_Diff"])
+    else:
+        df["_Selisih_Bukti"] = 0.0
+
     totals = {
         "total_debet": total_debet,
         "total_kredit": total_kredit,
@@ -231,16 +225,16 @@ def compute_jurnal(df: pd.DataFrame):
     }
     return df, totals
 
-# ---------- EKSPOR PDF REPORTLAB ----------
+# ---------- EKSPOR PDF REPORTLAB (DINAMIS & LANSKAP) ----------
 def build_pdf_report(df, totals):
-    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib import colors
     from reportlab.lib.units import mm
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
     buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=12*mm, bottomMargin=12*mm, leftMargin=10*mm, rightMargin=10*mm)
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), topMargin=10*mm, bottomMargin=10*mm, leftMargin=10*mm, rightMargin=10*mm)
     styles = getSampleStyleSheet()
     
     elements = []
@@ -248,48 +242,63 @@ def build_pdf_report(df, totals):
 
     title_style = ParagraphStyle("T1", parent=styles["Title"], fontSize=14, leading=16, textColor=navy, alignment=0)
     sub_style = ParagraphStyle("S1", parent=styles["Normal"], fontSize=8, textColor=colors.gray)
-    th_style = ParagraphStyle("TH", parent=styles["Normal"], fontSize=7.5, leading=9, textColor=colors.white, fontName="Helvetica-Bold")
-    td_style = ParagraphStyle("TD", parent=styles["Normal"], fontSize=7, leading=8.5)
-    td_red = ParagraphStyle("TDR", parent=styles["Normal"], fontSize=7, leading=8.5, textColor=colors.HexColor("#DC2626"), fontName="Helvetica-Bold")
+    th_style = ParagraphStyle("TH", parent=styles["Normal"], fontSize=8, leading=10, textColor=colors.white, fontName="Helvetica-Bold", alignment=1)
+    td_style = ParagraphStyle("TD", parent=styles["Normal"], fontSize=7.5, leading=9)
+    td_red = ParagraphStyle("TDR", parent=styles["Normal"], fontSize=7.5, leading=9, textColor=colors.HexColor("#DC2626"), fontName="Helvetica-Bold")
 
     elements.append(Paragraph(f"<b>{APP_TITLE}</b>", title_style))
     elements.append(Paragraph(f"Pemilik: {OWNER} | Tanggal Cetak: {datetime.now().strftime('%d-%m-%Y %H:%M WIB')}", sub_style))
-    elements.append(Spacer(1, 8))
+    elements.append(Spacer(1, 6))
 
     # Ringkasan Total
     summary_data = [
         [Paragraph("<b>Total Debet</b>", th_style), Paragraph("<b>Total Kredit</b>", th_style), Paragraph("<b>Selisih Total</b>", th_style), Paragraph("<b>Status Jurnal</b>", th_style)],
         [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph("<b>SEIMBANG</b>" if totals["balanced"] else "<font color='red'><b>TIDAK SEIMBANG</b></font>", td_style)]
     ]
-    t_sum = Table(summary_data, colWidths=[48*mm, 48*mm, 48*mm, 46*mm])
-    t_sum.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), navy), ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1"))]))
+    t_sum = Table(summary_data, colWidths=[65*mm, 65*mm, 65*mm, 60*mm])
+    t_sum.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), navy), 
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+    ]))
     elements.append(t_sum)
-    elements.append(Spacer(1, 10))
+    elements.append(Spacer(1, 8))
 
-    # Tabel Rincian Data
-    headers = [Paragraph(f"<b>{c}</b>", th_style) for c in STD_COLS]
+    # AMBIL KOLOM AKTIF SESUAI YANG TAMPIL DI PRATINJAU (DINAMIS)
+    display_cols = [c for c in df.columns if not c.startswith("_")]
+    headers = [Paragraph(f"<b>{c}</b>", th_style) for c in display_cols]
     rows_table = [headers]
 
     for _, r in df.iterrows():
         is_bad = abs(r.get("_Selisih_Bukti", 0)) > 0.01
         curr_style = td_red if is_bad else td_style
         
-        row_cells = [
-            Paragraph(str(r["KD"]), curr_style),
-            Paragraph(str(r["No. Bukti"]), curr_style),
-            Paragraph(str(r["Kode Perkiraan"]), curr_style),
-            Paragraph(str(r["Nama Perkiraan"]), curr_style),
-            Paragraph(str(r["Uraian"]), curr_style),
-            Paragraph(rupiah(r["Debet"]), curr_style),
-            Paragraph(rupiah(r["Kredit"]), curr_style),
-        ]
+        row_cells = []
+        for col in display_cols:
+            val = r.get(col, "")
+            # Format jika kolom Debet / Kredit
+            if "deb" in col.lower() or "kred" in col.lower():
+                val_num = to_num(val)
+                cell_text = rupiah(val_num)
+            else:
+                cell_text = str(val)
+            row_cells.append(Paragraph(cell_text, curr_style))
+            
         rows_table.append(row_cells)
 
-    t_detail = Table(rows_table, colWidths=[12*mm, 28*mm, 22*mm, 42*mm, 44*mm, 21*mm, 21*mm], repeatRows=1)
+    # Lebar kolom otomatis proporsional berdasarkan jumlah kolom yang aktif
+    num_cols = len(display_cols)
+    page_width = 275 * mm # Lebar efektif A4 lanskap
+    col_widths = [page_width / num_cols] * num_cols
+
+    t_detail = Table(rows_table, colWidths=col_widths, repeatRows=1)
     t_detail.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), navy),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ('TOPPADDING', (0,0), (-1,-1), 4),
     ]))
     elements.append(t_detail)
 
@@ -326,18 +335,25 @@ def main():
     if "df_raw" in st.session_state and st.session_state.df_raw is not None:
         st.subheader("② Pratinjau Data Tabel Hasil Ekstraksi")
 
-        # Alat Tambah / Hapus Kolom
-        with st.expander("🛠️ Panel Alat Pengaturan Kolom Tabel", expanded=False):
-            col_a, col_b = st.columns(2)
+        # PANEL PENGATURAN KOLOM (TAMBAH, HAPUS, & GANTI NAMA KOLOM)
+        with st.expander("🛠️ Panel Alat Pengaturan & Edit Nama Kolom Tabel", expanded=False):
+            col_a, col_b, col_c = st.columns(3)
             with col_a:
                 new_col = st.text_input("Nama Kolom Baru:")
-                if st.button("➕ Tambah Kolom Baru"):
+                if st.button("➕ Tambah Kolom"):
                     if new_col and new_col not in st.session_state.df_raw.columns:
                         st.session_state.df_raw[new_col] = ""
                         st.rerun()
             with col_b:
-                del_col = st.selectbox("Pilih Kolom Dihapus:", st.session_state.df_raw.columns)
-                if st.button("🗑️ Hapus Kolom Ini"):
+                target_col = st.selectbox("Pilih Kolom Diedit:", st.session_state.df_raw.columns, key="target_rename")
+                new_name = st.text_input("Nama Baru Kolom:")
+                if st.button("✏️ Ubah Nama Kolom"):
+                    if new_name and target_col:
+                        st.session_state.df_raw = st.session_state.df_raw.rename(columns={target_col: new_name})
+                        st.rerun()
+            with col_c:
+                del_col = st.selectbox("Pilih Kolom Dihapus:", st.session_state.df_raw.columns, key="target_delete")
+                if st.button("🗑️ Hapus Kolom"):
                     if len(st.session_state.df_raw.columns) > 1:
                         st.session_state.df_raw = st.session_state.df_raw.drop(columns=[del_col])
                         st.rerun()
@@ -371,7 +387,6 @@ def main():
 
         st.subheader("④ Tabel Transaksi (Hanya Transaksi Selisih Ditandai Merah)")
 
-        # HIGHLIGHTING PRESISI: Hanya tandai merah jika NOMOR BUKTI tersebut tidak seimbang!
         def highlight_unbalanced_voucher(row):
             if abs(row.get("_Selisih_Bukti", 0)) > 0.01:
                 return ['background-color: #FEE2E2; color: #991B1B; font-weight: bold;'] * len(row)
@@ -381,13 +396,11 @@ def main():
         styled_df = df[display_cols].style.apply(
             highlight_unbalanced_voucher, axis=1
         ).format({
-            "Debet": "{:,.2f}",
-            "Kredit": "{:,.2f}"
-        })
+            c: "{:,.2f}" for c in display_cols if "deb" in c.lower() or "kred" in c.lower()
+        }, na_rep="")
 
         st.dataframe(styled_df, use_container_width=True)
 
-        # ---------- FITUR EKSPOR PDF & EXCEL ----------
         st.divider()
         st.subheader("⑤ Cetak & Download Laporan")
         e1, e2 = st.columns(2)
@@ -396,7 +409,7 @@ def main():
             try:
                 pdf_bytes = build_pdf_report(df, totals)
                 st.download_button(
-                    "🖨️ Cetak / Download Laporan PDF",
+                    "🖨️ Cetak / Download Laporan PDF (Lanskap & Sinkron)",
                     data=pdf_bytes,
                     file_name=f"Laporan_Selisih_Jurnal_{datetime.now():%Y%m%d_%H%M}.pdf",
                     mime="application/pdf",
