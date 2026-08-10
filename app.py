@@ -72,7 +72,6 @@ def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
 
     df = df_raw.copy()
     
-    # Deteksi apakah file ini murni Laporan Saldo / Nominatif (tidak punya kolom debet/kredit eksplisit)
     cols_lower = [str(c).strip().lower() for c in df.columns]
     is_nominatif = not any("deb" in c or "kred" in c for c in cols_lower)
 
@@ -94,7 +93,7 @@ def clean_and_normalize_df(df_raw: pd.DataFrame) -> pd.DataFrame:
         elif "kred" in cl or "keluar" in cl or "credit" in cl or cl == "k": 
             col_map[c] = "Kredit"
         elif is_nominatif and ("saldo" in cl or "jumlah" in cl or "total" in cl or "nilai" in cl or "pokok" in cl or "jasa" in cl):
-            col_map[c] = "Debet" # Masukkan ke kolom Debet sebagai representasi nominal saldo
+            col_map[c] = "Debet"
 
     df = df.rename(columns=col_map)
 
@@ -210,7 +209,6 @@ def push_history(df):
 def compute_jurnal(df: pd.DataFrame):
     df = df.copy()
     
-    # Deteksi apakah ini laporan saldo / nominatif (tidak ada transaksi kredit/mutasi)
     raw_cols_lower = [str(c).lower() for c in df.columns]
     is_nominatif_mode = not any("kred" in c or "credit" in c or "keluar" in c for c in raw_cols_lower)
 
@@ -230,7 +228,6 @@ def compute_jurnal(df: pd.DataFrame):
     total_debet = float(df[debet_col].sum() if debet_col in df.columns else 0.0)
     total_kredit = float(df[kredit_col].sum() if kredit_col in df.columns else 0.0)
 
-    # JIKA LAPORAN SALDO / NOMINATIF: Jangan anggap selisih/tidak seimbang, cukup tampilkan total rekapitulasi saldo!
     if is_nominatif_mode:
         df["_Selisih_Bukti"] = 0.0
         df["Penyebab Selisih"] = ""
@@ -238,12 +235,11 @@ def compute_jurnal(df: pd.DataFrame):
             "total_debet": total_debet,
             "total_kredit": 0.0,
             "selisih": 0.0,
-            "balanced": True, # Selalu anggap valid/seimbang untuk laporan saldo
+            "balanced": True,
             "mode": "nominatif"
         }
         return df, totals
 
-    # JIKA JURNAL AKUNTANSI STANDAR: Lakukan cek selisih berpasangan
     diff = round(total_debet - total_kredit, 2)
     if bukti_col and bukti_col in df.columns:
         df["_Bukti_Group"] = df[bukti_col].astype(str).replace("", None).ffill().fillna("UNASSIGNED")
@@ -277,7 +273,7 @@ def compute_jurnal(df: pd.DataFrame):
     }
     return df, totals
 
-# ---------- EKSPOR PDF REPORTLAB ----------
+# ---------- EKSPOR PDF REPORTLAB (DENGAN BLOK MERAH MENYALA) ----------
 def build_pdf_report(df, totals, report_name=""):
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib import colors
@@ -291,12 +287,14 @@ def build_pdf_report(df, totals, report_name=""):
     
     elements = []
     navy = colors.HexColor("#1E3A5F")
+    light_red_bg = colors.HexColor("#FEE2E2")
+    red_text = colors.HexColor("#991B1B")
 
     title_style = ParagraphStyle("T1", parent=styles["Title"], fontSize=14, leading=16, textColor=navy, alignment=0)
     sub_style = ParagraphStyle("S1", parent=styles["Normal"], fontSize=8, textColor=colors.gray)
     th_style = ParagraphStyle("TH", parent=styles["Normal"], fontSize=8, leading=10, textColor=colors.white, fontName="Helvetica-Bold", alignment=1)
     td_style = ParagraphStyle("TD", parent=styles["Normal"], fontSize=7.5, leading=9)
-    td_red = ParagraphStyle("TDR", parent=styles["Normal"], fontSize=7.5, leading=9, textColor=colors.HexColor("#DC2626"), fontName="Helvetica-Bold")
+    td_red = ParagraphStyle("TDR", parent=styles["Normal"], fontSize=7.5, leading=9, textColor=red_text, fontName="Helvetica-Bold")
 
     elements.append(Paragraph(f"<b>{APP_TITLE}</b>", title_style))
     info_teks = f"Pemilik: {OWNER} | Sumber Laporan: <b>{report_name}</b> | Tanggal Cetak: {datetime.now().strftime('%d-%m-%Y %H:%M WIB')}"
@@ -331,10 +329,23 @@ def build_pdf_report(df, totals, report_name=""):
     headers = [Paragraph(f"<b>{c}</b>", th_style) for c in display_cols]
     rows_table = [headers]
 
-    for _, r in df.iterrows():
+    pdf_table_styles = [
+        ('BACKGROUND', (0,0), (-1,0), navy),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ('TOPPADDING', (0,0), (-1,-1), 4),
+    ]
+
+    for idx, r in df.iterrows():
         is_bad = not is_nominatif and abs(r.get("_Selisih_Bukti", 0)) > 0.01
         curr_style = td_red if is_bad else td_style
         
+        if is_bad:
+            pdf_table_styles.append(('BACKGROUND', (0, idx+1), (-1, idx+1), light_red_bg))
+        else:
+            pdf_table_styles.append(('BACKGROUND', (0, idx+1), (-1, idx+1), colors.white))
+
         row_cells = []
         for col in display_cols:
             val = r.get(col, "")
@@ -352,13 +363,7 @@ def build_pdf_report(df, totals, report_name=""):
     col_widths = [page_width / num_cols] * num_cols
 
     t_detail = Table(rows_table, colWidths=col_widths, repeatRows=1)
-    t_detail.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,-1), navy),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
-        ('VALIGN', (0,0), (-1,-1), 'TOP'),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-        ('TOPPADDING', (0,0), (-1,-1), 4),
-    ]))
+    t_detail.setStyle(TableStyle(pdf_table_styles))
     elements.append(t_detail)
 
     doc.build(elements)
@@ -513,7 +518,7 @@ def main():
             st.download_button(
                 "📊 Download Laporan Excel (.xlsx)",
                 data=buf_excel.getvalue(),
-                file_name=f"Analisis_Laporan_{datetime.now():%Y%m%d_%H%M}.pdf" if False else f"Analisis_Laporan_{datetime.now():%Y%m%d_%H%M}.xlsx",
+                file_name=f"Analisis_Laporan_{datetime.now():%Y%m%d_%H%M}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
