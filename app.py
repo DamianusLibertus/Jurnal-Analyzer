@@ -199,10 +199,10 @@ def process_uploaded_file(uploaded_file):
             if frames:
                 res_df = pd.concat(frames, ignore_index=True)
                 res_df.attrs["saldo_awal"] = s_awal
-                return res_df, (detected_modes[0] if detected_modes else "jurnal")
+                return res_df, (detected_modes[0] if detected_modes else "jurnal"), s_awal
         except Exception as e:
             st.error(f"Gagal membaca Excel {fname}: {e}")
-    return pd.DataFrame(columns=STD_COLS), "unknown"
+    return pd.DataFrame(columns=STD_COLS), "unknown", 0.0
 
 # ---------- ENGINE REKONSILIASI & AUDIT ----------
 def perform_dual_mode_analysis(df_all, analysis_mode):
@@ -219,7 +219,6 @@ def perform_dual_mode_analysis(df_all, analysis_mode):
 
     used_b = set()
 
-    # MODE 1: REKONSILIASI RAK (Sistem Berbeda - Logika Cerminan)
     if analysis_mode == "Rekonsiliasi RAK (Sistem Berbeda)":
         for idx_a, row_a in df_a.iterrows():
             val_a_kred = row_a["Kredit"]
@@ -229,7 +228,6 @@ def perform_dual_mode_analysis(df_all, analysis_mode):
             for idx_b, row_b in df_b.iterrows():
                 if idx_b in used_b:
                     continue
-                # Cermin: Kredit A == Debet B atau Debet A == Kredit B
                 if (val_a_kred > 0 and abs(val_a_kred - row_b["Debet"]) < 1.0) or \
                    (val_a_deb > 0 and abs(val_a_deb - row_b["Kredit"]) < 1.0):
                     matched_results.append({
@@ -247,7 +245,6 @@ def perform_dual_mode_analysis(df_all, analysis_mode):
             if idx_b not in used_b:
                 unmatched_b.append(row_b)
 
-    # MODE 2: AUDIT INTEGRITAS (Sistem Sama - Logika Direct Match)
     else:
         for idx_a, row_a in df_a.iterrows():
             val_a_deb = row_a["Debet"]
@@ -257,7 +254,6 @@ def perform_dual_mode_analysis(df_all, analysis_mode):
             for idx_b, row_b in df_b.iterrows():
                 if idx_b in used_b:
                     continue
-                # Direct Match: Debet A == Debet B dan Kredit A == Kredit B
                 if abs(val_a_deb - row_b["Debet"]) < 1.0 and abs(val_a_kred - row_b["Kredit"]) < 1.0:
                     matched_results.append({
                         "Uraian Transaksi": row_a["Uraian"],
@@ -288,7 +284,6 @@ def main():
     st.caption(f"Dikembangkan oleh {OWNER}")
     st.divider()
 
-    # Sidebar Pilihan Mode
     st.sidebar.header("⚙️ Pengaturan Analisis")
     selected_mode = st.sidebar.radio(
         "Pilih Metode Analisis:",
