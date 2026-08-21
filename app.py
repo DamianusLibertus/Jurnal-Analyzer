@@ -141,30 +141,25 @@ def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
     cols_to_keep = STD_COLS + (["Saldo"] if "Saldo" in df.columns else [])
     df = df[cols_to_keep].copy()
 
-    def is_valid_transaction_row(r):
-        kd_val = str(r.get("KD", "")).strip()
-        bukti_val = str(r.get("No. Bukti", "")).strip()
-        nama_val = str(r.get("Nama Perkiraan", "")).strip()
-        uraian_val = str(r.get("Uraian", "")).strip()
-        
-        # PERBAIKAN: Membuang kata kunci 'total' & 'jumlah' agar baris rekapitulasi Excel terbuang otomatis!
-        combined_text = f"{kd_val} {bukti_val} {nama_val} {uraian_val}".lower()
-        ignore_keywords = [
-            "ksp cu", "jl. jendral", "periode:", "catatan:", "direverifikasi", 
-            "halaman", "total", "jumlah", "saldo awal", "tanggal :"
-        ]
-        if any(kw in combined_text for kw in ignore_keywords):
+    # FIX: Filter membuang baris JUMLAH / TOTAL SEBELUM ffill dijalankan
+    def filter_out_summary_rows(r):
+        row_str = " ".join([str(val) for val in r.values if pd.notna(val)]).lower()
+        if "jumlah" in row_str or "total" in row_str or "saldo awal" in row_str:
             return False
-            
+        if "ksp cu" in row_str or "periode:" in row_str or "halaman" in row_str or "tanggal :" in row_str:
+            return False
+        
         d_val = to_num(r.get("Debet", 0))
         k_val = to_num(r.get("Kredit", 0))
-        if d_val == 0.0 and k_val == 0.0 and len(combined_text.strip()) < 3:
+        
+        if d_val == 0.0 and k_val == 0.0 and len(row_str.strip()) < 3:
             return False
             
         return True
 
-    df = df[df.apply(is_valid_transaction_row, axis=1)].reset_index(drop=True)
+    df = df[df.apply(filter_out_summary_rows, axis=1)].reset_index(drop=True)
 
+    # Menjalankan ffill setelah baris JUMLAH dibersihkan
     df["KD"] = df["KD"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("JU")
     df["No. Bukti"] = df["No. Bukti"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("ACC-AUTO")
     df["Uraian"] = df["Uraian"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("")
