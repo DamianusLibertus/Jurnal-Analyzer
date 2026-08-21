@@ -269,7 +269,7 @@ def compute_jurnal(df: pd.DataFrame, report_mode: str):
             "total_debet": total_debet,
             "total_kredit": total_kredit,
             "selisih": diff,
-            "balanced": True,
+            "balanced": abs(diff) < 1.0,  # FIX: Evaluasi ke seimbang hanya jika selisih < 1.0
             "mode": "ledger"
         }
         return df, totals
@@ -338,6 +338,7 @@ def build_pdf_report(df, totals, report_name=""):
     elements.append(Spacer(1, 4))
 
     mode = totals.get("mode")
+    status_text = "<b>SEIMBANG & LENGKAP</b>" if totals["balanced"] else "<font color='red'><b>PERHATIAN (ADA SELISIH)</b></font>"
     
     if mode == "nominatif":
         summary_data = [
@@ -348,13 +349,13 @@ def build_pdf_report(df, totals, report_name=""):
     elif mode == "ledger":
         summary_data = [
             [Paragraph("<b>Total Debet (Masuk)</b>", th_style), Paragraph("<b>Total Kredit (Keluar)</b>", th_style), Paragraph("<b>Mutasi / Selisih Netto</b>", th_style), Paragraph("<b>Status Buku Kas</b>", th_style)],
-            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph("<b>DAFTAR TRANSAKSI VALID</b>", td_style)]
+            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph(status_text, td_style)]
         ]
         t_sum = Table(summary_data, colWidths=[65*mm, 65*mm, 65*mm, 60*mm])
     else:
         summary_data = [
             [Paragraph("<b>Total Debet</b>", th_style), Paragraph("<b>Total Kredit</b>", th_style), Paragraph("<b>Selisih Total</b>", th_style), Paragraph("<b>Status Jurnal</b>", th_style)],
-            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph("<b>SEIMBANG & LENGKAP</b>" if totals["balanced"] else "<font color='red'><b>PERHATIAN (ADA SELISIH)</b></font>", td_style)]
+            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph(status_text, td_style)]
         ]
         t_sum = Table(summary_data, colWidths=[65*mm, 65*mm, 65*mm, 60*mm])
 
