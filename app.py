@@ -1,7 +1,7 @@
 # =========================================================
 # COPYRIGHT & LICENSE NOTICE
 # Copyright (c) 2026 Damianus Libertus. All Rights Reserved.
-# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Lengkap dengan Panel Kolom)
+# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Dynamic Rows)
 # =========================================================
 
 import os
@@ -198,7 +198,6 @@ def main():
 
         st.subheader("② Pratinjau & Edit Data Jurnal")
         
-        # --- PANEL PENGATURAN KOLOM KEMBALI ADA DI SINI ---
         with st.expander("🛠️ Panel Pengaturan Kolom (Tambah / Hapus Kolom)", expanded=False):
             c1, c2 = st.columns(2)
             with c1:
@@ -213,6 +212,7 @@ def main():
                     st.session_state.df = st.session_state.df.drop(columns=[col_del])
                     st.rerun()
 
+        # Mengaktifkan baris dinamis penuh agar bisa tambah baris dengan leluasa
         st.session_state.df = st.data_editor(st.session_state.df, num_rows="dynamic", use_container_width=True)
         
         st.divider()
