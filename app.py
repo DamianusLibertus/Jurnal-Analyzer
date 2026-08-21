@@ -1,7 +1,7 @@
 # =========================================================
 # COPYRIGHT & LICENSE NOTICE
 # Copyright (c) 2026 Damianus Libertus. All Rights Reserved.
-# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Full Features Final)
+# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Fixed Syntax)
 # =========================================================
 
 import os
@@ -23,7 +23,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 load_dotenv()
 
-APP_TITLE = "Aplikasi Analisis Jurnal & Rekonsiliasi (Full Features Final)"
+APP_TITLE = "Aplikasi Analisis Jurnal & Rekonsiliasi (Fixed Syntax)"
 OWNER = "Damianus Libertus"
 
 st.set_page_config(
@@ -343,7 +343,7 @@ def build_pdf_report(df, rak_res):
             [Paragraph("<b>Keterangan Rekonsiliasi RAK</b>", th_style), Paragraph("<b>Jumlah / Nilai</b>", th_style)],
             [Paragraph("Saldo Akhir Cabang", td_style), Paragraph(rupiah(rak_res["sal_cabang"]), td_right)],
             [Paragraph("Saldo Akhir Pusat", td_style), Paragraph(rupiah(rak_res["sal_pusat"]), td_right)],
-            [Paragraph("<b>Selisih RAK Netto</b>", td_style), Paragraph(<b>rupiah(rak_res["selisih_akhir"])</b>, td_right)],
+            [Paragraph("<b>Selisih RAK Netto</b>", td_style), Paragraph(f"<b>{rupiah(rak_res['selisih_akhir'])}</b>", td_right)],
         ]
         t_summary = Table(summary_data, colWidths=[120*mm, 155*mm])
         t_summary.setStyle(TableStyle([
