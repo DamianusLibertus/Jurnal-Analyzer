@@ -1,7 +1,7 @@
 # =========================================================
 # COPYRIGHT & LICENSE NOTICE
 # Copyright (c) 2026 Damianus Libertus. All Rights Reserved.
-# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Stable Final)
+# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Stable Final + Download)
 # =========================================================
 
 import os
@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_TITLE = "Aplikasi Analisis Jurnal & Rekonsiliasi (Stable Final)"
+APP_TITLE = "Aplikasi Analisis Jurnal & Rekonsiliasi (Stable Final + Download)"
 OWNER = "Damianus Libertus"
 
 st.set_page_config(
@@ -231,7 +231,7 @@ def perform_rak_reconciliation(df_all):
     kred_pusat = df_pusat["Kredit"].sum()
     sal_pusat = sa_pusat + deb_pusat - kred_pusat
 
-    selisih_akhir = sal_pusat - sal_cabang
+    selisih_akhir = sal_pusat - sa_cabang if False else sal_pusat - sal_cabang
 
     matched_results, unmatched_cabang, unmatched_pusat, wrong_side = [], [], [], []
     pusat_used = set()
@@ -381,6 +381,20 @@ def main():
                     st.rerun()
 
         st.session_state.df_raw = st.data_editor(st.session_state.df_raw, num_rows="dynamic", use_container_width=True)
+
+        # --- TOMBOL DOWNLOAD EXCEL ---
+        st.divider()
+        st.subheader("③ Download Hasil Tabel")
+        buf_excel = BytesIO()
+        with pd.ExcelWriter(buf_excel, engine="openpyxl") as writer:
+            st.session_state.df_raw.to_excel(writer, index=False, sheet_name="Data_Combined")
+        st.download_button(
+            label="📊 Download Tabel ke Excel (.xlsx)",
+            data=buf_excel.getvalue(),
+            file_name=f"Hasil_Analisis_{datetime.now():%Y%m%d_%H%M}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
 
 if __name__ == "__main__":
     main()
