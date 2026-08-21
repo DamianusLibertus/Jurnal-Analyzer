@@ -1,7 +1,7 @@
 # =========================================================
 # COPYRIGHT & LICENSE NOTICE
 # Copyright (c) 2026 Damianus Libertus. All Rights Reserved.
-# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Stable Final + Download)
+# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Stable Full View)
 # =========================================================
 
 import os
@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_TITLE = "Aplikasi Analisis Jurnal & Rekonsiliasi (Stable Final + Download)"
+APP_TITLE = "Aplikasi Analisis Jurnal & Rekonsiliasi (Stable Full View)"
 OWNER = "Damianus Libertus"
 
 st.set_page_config(
@@ -231,7 +231,7 @@ def perform_rak_reconciliation(df_all):
     kred_pusat = df_pusat["Kredit"].sum()
     sal_pusat = sa_pusat + deb_pusat - kred_pusat
 
-    selisih_akhir = sal_pusat - sa_cabang if False else sal_pusat - sal_cabang
+    selisih_akhir = sal_pusat - sal_cabang
 
     matched_results, unmatched_cabang, unmatched_pusat, wrong_side = [], [], [], []
     pusat_used = set()
@@ -356,13 +356,26 @@ def main():
             tab1, tab2, tab3 = st.tabs(["🔴 Selisih & Unmatched", "❌ Salah Posisi Posting", "✅ Transaksi Matched"])
             with tab1:
                 st.markdown("##### 📌 Belum Dicatat Pusat")
-                st.dataframe(rak["unmatched_cabang"], use_container_width=True)
+                if not rak["unmatched_cabang"].empty:
+                    st.dataframe(rak["unmatched_cabang"], use_container_width=True)
+                else:
+                    st.info("Tidak ada transaksi menggantung di Cabang.")
+
                 st.markdown("##### 📌 Belum Dicatat Cabang")
-                st.dataframe(rak["unmatched_pusat"], use_container_width=True)
+                if not rak["unmatched_pusat"].empty:
+                    st.dataframe(rak["unmatched_pusat"], use_container_width=True)
+                else:
+                    st.info("Tidak ada transaksi menggantung di Pusat.")
             with tab2:
-                st.dataframe(rak["wrong_side"], use_container_width=True)
+                if not rak["wrong_side"].empty:
+                    st.dataframe(rak["wrong_side"], use_container_width=True)
+                else:
+                    st.success("Tidak ditemukan kesalahan posisi posting.")
             with tab3:
-                st.dataframe(rak["matched"], use_container_width=True)
+                if not rak["matched"].empty:
+                    st.dataframe(rak["matched"], use_container_width=True)
+                else:
+                    st.info("Tidak ada transaksi yang cocok.")
 
         st.subheader("② Pratinjau & Edit Tabel Data Combined")
         
@@ -382,7 +395,6 @@ def main():
 
         st.session_state.df_raw = st.data_editor(st.session_state.df_raw, num_rows="dynamic", use_container_width=True)
 
-        # --- TOMBOL DOWNLOAD EXCEL ---
         st.divider()
         st.subheader("③ Download Hasil Tabel")
         buf_excel = BytesIO()
