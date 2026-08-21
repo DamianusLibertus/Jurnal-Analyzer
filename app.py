@@ -1,7 +1,7 @@
 # =========================================================
 # COPYRIGHT & LICENSE NOTICE
 # Copyright (c) 2026 Damianus Libertus. All Rights Reserved.
-# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Final Asli Sempurna)
+# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Lengkap dengan Panel Kolom)
 # =========================================================
 
 import os
@@ -60,7 +60,7 @@ def rupiah(v: float) -> str:
     try: return f"Rp {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception: return str(v)
 
-# ---------- UNIVERSAL CLEANING PARSER (ASLI & LENGKAP) ----------
+# ---------- UNIVERSAL CLEANING PARSER ----------
 STD_COLS = ["KD", "No. Bukti", "Kode Perkiraan", "Nama Perkiraan", "Uraian", "Debet", "Kredit"]
 
 def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
@@ -197,6 +197,22 @@ def main():
             with t2: st.dataframe(rak["matched"], use_container_width=True)
 
         st.subheader("② Pratinjau & Edit Data Jurnal")
+        
+        # --- PANEL PENGATURAN KOLOM KEMBALI ADA DI SINI ---
+        with st.expander("🛠️ Panel Pengaturan Kolom (Tambah / Hapus Kolom)", expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                col_add = st.text_input("Nama Kolom Baru:")
+                if st.button("➕ Tambah Kolom"):
+                    if col_add and col_add not in st.session_state.df.columns:
+                        st.session_state.df[col_add] = ""
+                        st.rerun()
+            with c2:
+                col_del = st.selectbox("Pilih Kolom Dihapus:", st.session_state.df.columns)
+                if st.button("🗑️ Hapus Kolom"):
+                    st.session_state.df = st.session_state.df.drop(columns=[col_del])
+                    st.rerun()
+
         st.session_state.df = st.data_editor(st.session_state.df, num_rows="dynamic", use_container_width=True)
         
         st.divider()
