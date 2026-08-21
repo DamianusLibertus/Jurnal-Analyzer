@@ -142,30 +142,34 @@ def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
     df = df[cols_to_keep].copy()
 
     # =========================================================================
-    # KUNCI UTAMA: SAPU BERSIH BARIS "JUMLAH / TOTAL" SEBELUM FFILL DIJALANKAN
+    # FILTER AMAN: HANYA MEMBUANG BARIS TOTAL/JUMLAH DI KOLOM KIRI (KD / NO. BUKTI)
     # =========================================================================
     clean_rows = []
     for _, r in df.iterrows():
-        # Gabungkan semua sel dalam 1 baris menjadi teks tunggal tanpa spasi
-        raw_row_text = " ".join([str(v) for v in r.values if pd.notna(v)]).lower()
-        compact_row_text = raw_row_text.replace(" ", "") # Menghapus spasi untuk deteksi 'j u m l a h'
+        kd_val = str(r.get("KD", "")).lower().replace(" ", "")
+        bukti_val = str(r.get("No. Bukti", "")).lower().replace(" ", "")
+        uraian_val = str(r.get("Uraian", "")).lower().replace(" ", "")
         
-        # Jika ditemukan kata jumlah / total / saldo awal / header, LANGSUNG DIBUANG!
-        if any(kw in compact_row_text for kw in ["jumlah", "total", "saldoawal", "kspcu", "periode:", "halaman", "tanggal:"]):
+        is_summary_row = False
+        if any(w in kd_val or w in bukti_val for w in ["jumlah", "tot"]):
+            is_summary_row = True
+        elif uraian_val in ["jumlah", "total", "subtotal"]:
+            is_summary_row = True
+        
+        if is_summary_row:
             continue
             
+        full_row_text = f"{kd_val} {bukti_val} {uraian_val}"
         d_val = to_num(r.get("Debet", 0))
         k_val = to_num(r.get("Kredit", 0))
         
-        # Buang baris kosong tanpa angka
-        if d_val == 0.0 and k_val == 0.0 and len(compact_row_text) < 3:
+        if d_val == 0.0 and k_val == 0.0 and len(full_row_text.strip()) < 3:
             continue
             
         clean_rows.append(r)
 
     df_filtered = pd.DataFrame(clean_rows).reset_index(drop=True) if clean_rows else pd.DataFrame(columns=cols_to_keep)
 
-    # Menjalankan ffill HANYA setelah baris JUMLAH dipastikan sudah terbuang
     df_filtered["KD"] = df_filtered["KD"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("JU")
     df_filtered["No. Bukti"] = df_filtered["No. Bukti"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("ACC-AUTO")
     df_filtered["Uraian"] = df_filtered["Uraian"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("")
