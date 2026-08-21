@@ -1,7 +1,7 @@
 # =========================================================
 # COPYRIGHT & LICENSE NOTICE
 # Copyright (c) 2026 Damianus Libertus. All Rights Reserved.
-# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Stable Full View)
+# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Full Features Final)
 # =========================================================
 
 import os
@@ -15,9 +15,15 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib import colors
+from reportlab.lib.units import mm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
 load_dotenv()
 
-APP_TITLE = "Aplikasi Analisis Jurnal & Rekonsiliasi (Stable Full View)"
+APP_TITLE = "Aplikasi Analisis Jurnal & Rekonsiliasi (Full Features Final)"
 OWNER = "Damianus Libertus"
 
 st.set_page_config(
@@ -316,6 +322,62 @@ def perform_rak_reconciliation(df_all):
         "unmatched_pusat": pd.DataFrame(unmatched_pusat),
     }
 
+# ---------- PDF GENERATOR ----------
+def build_pdf_report(df, rak_res):
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), topMargin=10*mm, bottomMargin=10*mm, leftMargin=10*mm, rightMargin=10*mm)
+    styles = getSampleStyleSheet()
+    
+    elements = []
+    navy = colors.HexColor("#1E3A5F")
+    th_style = ParagraphStyle("TH", parent=styles["Normal"], fontSize=7.5, leading=9, textColor=colors.white, fontName="Helvetica-Bold", alignment=1)
+    td_style = ParagraphStyle("TD", parent=styles["Normal"], fontSize=7, leading=8.5)
+    td_right = ParagraphStyle("TDR", parent=styles["Normal"], fontSize=7, leading=8.5, alignment=2)
+
+    elements.append(Paragraph(f"<b>{APP_TITLE}</b>", ParagraphStyle("T1", parent=styles["Title"], fontSize=13, leading=15, textColor=navy)))
+    elements.append(Paragraph(f"Dicetak Tanggal: {datetime.now().strftime('%d-%m-%Y %H:%M')}", ParagraphStyle("S1", fontSize=8, textColor=colors.gray)))
+    elements.append(Spacer(1, 6))
+
+    if rak_res:
+        summary_data = [
+            [Paragraph("<b>Keterangan Rekonsiliasi RAK</b>", th_style), Paragraph("<b>Jumlah / Nilai</b>", th_style)],
+            [Paragraph("Saldo Akhir Cabang", td_style), Paragraph(rupiah(rak_res["sal_cabang"]), td_right)],
+            [Paragraph("Saldo Akhir Pusat", td_style), Paragraph(rupiah(rak_res["sal_pusat"]), td_right)],
+            [Paragraph("<b>Selisih RAK Netto</b>", td_style), Paragraph(<b>rupiah(rak_res["selisih_akhir"])</b>, td_right)],
+        ]
+        t_summary = Table(summary_data, colWidths=[120*mm, 155*mm])
+        t_summary.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), navy),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ]))
+        elements.append(t_summary)
+        elements.append(Spacer(1, 8))
+
+    display_cols = [c for c in df.columns if not c.startswith("_")]
+    headers = [Paragraph(f"<b>{c}</b>", th_style) for c in display_cols]
+    rows_table = [headers]
+
+    for _, r in df.iterrows():
+        row_cells = []
+        for col in display_cols:
+            val = r.get(col, "")
+            if col in ["Debet", "Kredit", "Saldo"]:
+                row_cells.append(Paragraph(rupiah(to_num(val)), td_right))
+            else:
+                row_cells.append(Paragraph(str(val), td_style))
+        rows_table.append(row_cells)
+
+    t_detail = Table(rows_table, colWidths=[275*mm / len(display_cols)] * len(display_cols), repeatRows=1)
+    t_detail.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), navy),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+    ]))
+    elements.append(t_detail)
+    doc.build(elements)
+    return buf.getvalue()
+
 # ---------- ANTARMUKA UTAMA ----------
 def main():
     st.markdown(f"# 📊 {APP_TITLE}")
@@ -396,11 +458,24 @@ def main():
         st.session_state.df_raw = st.data_editor(st.session_state.df_raw, num_rows="dynamic", use_container_width=True)
 
         st.divider()
-        st.subheader("③ Download Hasil Tabel")
+        st.subheader("③ Download & Cetak Laporan")
+        e1, e2 = st.columns(2)
+        
+        # Tombol PDF
+        pdf_bytes = build_pdf_report(st.session_state.df_raw, st.session_state.get("rak_res"))
+        e1.download_button(
+            label="🖨️ Cetak Laporan PDF",
+            data=pdf_bytes,
+            file_name=f"Laporan_RAK_{datetime.now():%Y%m%d_%H%M}.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+        
+        # Tombol Excel
         buf_excel = BytesIO()
         with pd.ExcelWriter(buf_excel, engine="openpyxl") as writer:
             st.session_state.df_raw.to_excel(writer, index=False, sheet_name="Data_Combined")
-        st.download_button(
+        e2.download_button(
             label="📊 Download Tabel ke Excel (.xlsx)",
             data=buf_excel.getvalue(),
             file_name=f"Hasil_Analisis_{datetime.now():%Y%m%d_%H%M}.xlsx",
