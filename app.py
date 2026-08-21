@@ -141,37 +141,31 @@ def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
     cols_to_keep = STD_COLS + (["Saldo"] if "Saldo" in df.columns else [])
     df = df[cols_to_keep].copy()
 
-    # --- FILTER DUA LAPIS (STRING REGEX COMPACT & AKUMULASI ANGKA) ---
+    # =========================================================================
+    # KUNCI UTAMA: SAPU BERSIH BARIS "JUMLAH / TOTAL" SEBELUM FFILL DIJALANKAN
+    # =========================================================================
     clean_rows = []
-    running_debet = 0.0
-    running_kredit = 0.0
-
     for _, r in df.iterrows():
-        # Clean string & hilangkan semua spasi ekstra untuk deteksi "j u m l a h"
-        raw_text = " ".join([str(v) for v in r.values if pd.notna(v)]).lower()
-        compact_text = raw_text.replace(" ", "")
+        # Gabungkan semua sel dalam 1 baris menjadi teks tunggal tanpa spasi
+        raw_row_text = " ".join([str(v) for v in r.values if pd.notna(v)]).lower()
+        compact_row_text = raw_row_text.replace(" ", "") # Menghapus spasi untuk deteksi 'j u m l a h'
         
+        # Jika ditemukan kata jumlah / total / saldo awal / header, LANGSUNG DIBUANG!
+        if any(kw in compact_row_text for kw in ["jumlah", "total", "saldoawal", "kspcu", "periode:", "halaman", "tanggal:"]):
+            continue
+            
         d_val = to_num(r.get("Debet", 0))
         k_val = to_num(r.get("Kredit", 0))
-
-        # 1. Cek kata kunci rekapitulasi (termasuk variasi spasi seperti 'j u m l a h')
-        if any(kw in compact_text for kw in ["jumlah", "total", "saldoawal", "kspcu", "periode:", "halaman", "tanggal:"]):
+        
+        # Buang baris kosong tanpa angka
+        if d_val == 0.0 and k_val == 0.0 and len(compact_row_text) < 3:
             continue
-
-        # 2. Cek Akumulasi Angka: Jika nilainya sama persis dengan total penjumlahan sebelum baris ini
-        if (d_val > 0 and abs(d_val - running_debet) < 1.0) or (k_val > 0 and abs(k_val - running_kredit) < 1.0):
-            continue
-
-        # 3. Abaikan baris kosong tanpa angka
-        if d_val == 0.0 and k_val == 0.0 and len(compact_text) < 3:
-            continue
-
-        running_debet += d_val
-        running_kredit += k_val
+            
         clean_rows.append(r)
 
     df_filtered = pd.DataFrame(clean_rows).reset_index(drop=True) if clean_rows else pd.DataFrame(columns=cols_to_keep)
 
+    # Menjalankan ffill HANYA setelah baris JUMLAH dipastikan sudah terbuang
     df_filtered["KD"] = df_filtered["KD"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("JU")
     df_filtered["No. Bukti"] = df_filtered["No. Bukti"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("ACC-AUTO")
     df_filtered["Uraian"] = df_filtered["Uraian"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("")
