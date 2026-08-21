@@ -141,37 +141,39 @@ def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
     cols_to_keep = STD_COLS + (["Saldo"] if "Saldo" in df.columns else [])
     df = df[cols_to_keep].copy()
 
-    # FIX: Filter membuang baris JUMLAH / TOTAL SEBELUM ffill dijalankan
-    def filter_out_summary_rows(r):
-        row_str = " ".join([str(val) for val in r.values if pd.notna(val)]).lower()
-        if "jumlah" in row_str or "total" in row_str or "saldo awal" in row_str:
-            return False
-        if "ksp cu" in row_str or "periode:" in row_str or "halaman" in row_str or "tanggal :" in row_str:
-            return False
+    # DETEKSI DAN MEMBUANG BARIS REKAPITULASI (JUMLAH / TOTAL) SEBELUM FFILL
+    clean_rows = []
+    for _, r in df.iterrows():
+        full_row_text = " ".join([str(v) for v in r.values if pd.notna(v)]).lower().strip()
         
+        # Abaikan baris rekap/header bawaan Excel
+        if any(kw in full_row_text for kw in ["jumlah", "total", "saldo awal", "ksp cu", "periode:", "halaman", "tanggal :"]):
+            continue
+            
         d_val = to_num(r.get("Debet", 0))
         k_val = to_num(r.get("Kredit", 0))
         
-        if d_val == 0.0 and k_val == 0.0 and len(row_str.strip()) < 3:
-            return False
+        # Abaikan baris kosong tanpa angka
+        if d_val == 0.0 and k_val == 0.0 and len(full_row_text) < 3:
+            continue
             
-        return True
+        clean_rows.append(r)
 
-    df = df[df.apply(filter_out_summary_rows, axis=1)].reset_index(drop=True)
+    df_filtered = pd.DataFrame(clean_rows).reset_index(drop=True) if clean_rows else pd.DataFrame(columns=cols_to_keep)
 
-    # Menjalankan ffill setelah baris JUMLAH dibersihkan
-    df["KD"] = df["KD"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("JU")
-    df["No. Bukti"] = df["No. Bukti"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("ACC-AUTO")
-    df["Uraian"] = df["Uraian"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("")
+    # Menjalankan ffill HANYA pada baris transaksi murni
+    df_filtered["KD"] = df_filtered["KD"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("JU")
+    df_filtered["No. Bukti"] = df_filtered["No. Bukti"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("ACC-AUTO")
+    df_filtered["Uraian"] = df_filtered["Uraian"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("")
 
-    df["Debet"] = df["Debet"].apply(to_num)
-    df["Kredit"] = df["Kredit"].apply(to_num)
-    if "Saldo" in df.columns:
-        df["Saldo"] = df["Saldo"].apply(to_num)
+    df_filtered["Debet"] = df_filtered["Debet"].apply(to_num)
+    df_filtered["Kredit"] = df_filtered["Kredit"].apply(to_num)
+    if "Saldo" in df_filtered.columns:
+        df_filtered["Saldo"] = df_filtered["Saldo"].apply(to_num)
 
-    df["Source_File"] = filename
-    df.attrs["saldo_awal"] = saldo_awal_val
-    return df, detected_mode, saldo_awal_val
+    df_filtered["Source_File"] = filename
+    df_filtered.attrs["saldo_awal"] = saldo_awal_val
+    return df_filtered, detected_mode, saldo_awal_val
 
 def process_uploaded_file(uploaded_file):
     fname = uploaded_file.name
