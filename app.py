@@ -1,7 +1,7 @@
 # =========================================================
 # COPYRIGHT & LICENSE NOTICE
 # Copyright (c) 2026 Damianus Libertus. All Rights Reserved.
-# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Final & Utuh)
+# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Final Asli Sempurna)
 # =========================================================
 
 import os
@@ -60,7 +60,7 @@ def rupiah(v: float) -> str:
     try: return f"Rp {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception: return str(v)
 
-# ---------- UNIVERSAL CLEANING PARSER ----------
+# ---------- UNIVERSAL CLEANING PARSER (ASLI & LENGKAP) ----------
 STD_COLS = ["KD", "No. Bukti", "Kode Perkiraan", "Nama Perkiraan", "Uraian", "Debet", "Kredit"]
 
 def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
@@ -77,6 +77,7 @@ def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
             df.columns = [str(val).strip() for val in row.values]
             df = df.iloc[idx+1:].reset_index(drop=True)
             break
+    
     df.columns = [str(c).strip() for c in df.columns]
     col_map = {}
     assigned_targets = set()
@@ -87,14 +88,18 @@ def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
         elif ('bukti' in cl or 'ref' in cl) and 'No. Bukti' not in assigned_targets: target = 'No. Bukti'
         elif ('kode' in cl and 'perkiraan' in cl) or cl == 'kode' and 'Kode Perkiraan' not in assigned_targets: target = 'Kode Perkiraan'
         elif (('nama' in cl and 'perkiraan' in cl) or cl == 'akun') and 'Nama Perkiraan' not in assigned_targets: target = 'Nama Perkiraan'
-        elif ('uraian' in cl or 'keterangan' in cl) and 'Uraian' not in assigned_targets: target = 'Uraian'
+        elif ('uraian' in cl or 'keterangan' in cl or 'u r a i a n' in cl) and 'Uraian' not in assigned_targets: target = 'Uraian'
         elif (cl.startswith('debet') or 'debet' in cl) and 'Debet' not in assigned_targets: target = 'Debet'
         elif (cl.startswith('kredit') or 'kredit' in cl) and 'Kredit' not in assigned_targets: target = 'Kredit'
+        elif 'saldo' in cl and 'Saldo' not in assigned_targets: target = 'Saldo'
         if target: col_map[c] = target; assigned_targets.add(target)
+    
     df = df.rename(columns=col_map)
     for col in STD_COLS:
         if col not in df.columns: df[col] = ""
-    df = df[STD_COLS].copy()
+    cols_to_keep = STD_COLS + (["Saldo"] if "Saldo" in df.columns else [])
+    df = df[cols_to_keep].copy()
+
     clean_rows = []
     for _, r in df.iterrows():
         kd_val = str(r.get("KD", "")).lower().replace(" ", "")
@@ -103,11 +108,14 @@ def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
         if any(w in kd_val or w in bukti_val for w in ["jumlah", "tot"]) or uraian_val in ["jumlah", "total", "subtotal"]: continue
         if to_num(r.get("Debet", 0)) == 0.0 and to_num(r.get("Kredit", 0)) == 0.0 and len(uraian_val) < 3: continue
         clean_rows.append(r)
-    df_filtered = pd.DataFrame(clean_rows).reset_index(drop=True) if clean_rows else pd.DataFrame(columns=STD_COLS)
+        
+    df_filtered = pd.DataFrame(clean_rows).reset_index(drop=True) if clean_rows else pd.DataFrame(columns=cols_to_keep)
     df_filtered["KD"] = df_filtered["KD"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("JU")
     df_filtered["No. Bukti"] = df_filtered["No. Bukti"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("ACC-AUTO")
+    df_filtered["Uraian"] = df_filtered["Uraian"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("")
     df_filtered["Debet"] = df_filtered["Debet"].apply(to_num)
     df_filtered["Kredit"] = df_filtered["Kredit"].apply(to_num)
+    if "Saldo" in df_filtered.columns: df_filtered["Saldo"] = df_filtered["Saldo"].apply(to_num)
     df_filtered["Source_File"] = filename
     return df_filtered, "jurnal", saldo_awal_val
 
@@ -115,9 +123,15 @@ def process_uploaded_file(uploaded_file):
     fname = uploaded_file.name
     file_bytes = uploaded_file.getvalue()
     try:
-        df = pd.read_excel(BytesIO(file_bytes))
-        return universal_clean_and_parse(df, fname)
-    except: return pd.DataFrame(columns=STD_COLS), "unknown", 0.0
+        xls = pd.ExcelFile(BytesIO(file_bytes))
+        frames = []
+        for sh in xls.sheet_names:
+            df_sh = pd.read_excel(BytesIO(file_bytes), sheet_name=sh)
+            cleaned_df, _, _ = universal_clean_and_parse(df_sh, fname)
+            if not cleaned_df.empty: frames.append(cleaned_df)
+        if frames: return pd.concat(frames, ignore_index=True)
+    except: pass
+    return pd.DataFrame(columns=STD_COLS)
 
 # ---------- ENGINE RAK & PDF ----------
 def perform_rak_reconciliation(df_all):
@@ -127,12 +141,13 @@ def perform_rak_reconciliation(df_all):
     df_b = df_all[df_all["Source_File"] == files[1]].copy().reset_index(drop=True)
     if "pusat" in files[1].lower(): df_c, df_p = df_a, df_b
     else: df_c, df_p = df_b, df_a
+    
     sal_c = df_c["Debet"].sum() - df_c["Kredit"].sum()
     sal_p = df_p["Debet"].sum() - df_p["Kredit"].sum()
     
-    matched, un_c, un_p, wrong = [], [], [], []
+    matched, un_c, un_p = [], [], []
     p_used = set()
-    for idx_c, row_c in df_c.iterrows():
+    for _, row_c in df_c.iterrows():
         found = False
         for idx_p, row_p in df_p.iterrows():
             if idx_p in p_used: continue
@@ -142,7 +157,7 @@ def perform_rak_reconciliation(df_all):
         if not found: un_c.append({"Uraian": row_c["Uraian"], "Nominal": rupiah(row_c["Debet"] or row_c["Kredit"]), "Status": "BELUM DI PUSAT"})
     for idx_p, row_p in df_p.iterrows():
         if idx_p not in p_used: un_p.append({"Uraian": row_p["Uraian"], "Nominal": rupiah(row_p["Debet"] or row_p["Kredit"]), "Status": "HANYA DI PUSAT"})
-    return {"name_cabang": "Cabang", "name_pusat": "Pusat", "sal_c": sal_c, "sal_p": sal_p, "selisih": sal_p - sal_c, "matched": pd.DataFrame(matched), "un_c": pd.DataFrame(un_c), "un_p": pd.DataFrame(un_p)}
+    return {"sal_c": sal_c, "sal_p": sal_p, "selisih": sal_p - sal_c, "matched": pd.DataFrame(matched), "un_c": pd.DataFrame(un_c), "un_p": pd.DataFrame(un_p)}
 
 def build_pdf_report(df, rak):
     buf = BytesIO()
@@ -164,10 +179,11 @@ def main():
     st.markdown(f"# 📊 {APP_TITLE}")
     up_files = st.file_uploader("Upload 2 file Excel", accept_multiple_files=True)
     if st.button("🚀 Ekstrak & Analisis"):
-        all_frames = [process_uploaded_file(f)[0] for f in up_files]
-        st.session_state.df = pd.concat(all_frames, ignore_index=True)
-        st.session_state.rak = perform_rak_reconciliation(st.session_state.df)
-        st.rerun()
+        if up_files and len(up_files) >= 2:
+            all_frames = [process_uploaded_file(f) for f in up_files]
+            st.session_state.df = pd.concat(all_frames, ignore_index=True)
+            st.session_state.rak = perform_rak_reconciliation(st.session_state.df)
+            st.rerun()
 
     if "df" in st.session_state:
         if st.session_state.get("rak"):
@@ -176,11 +192,11 @@ def main():
             c1.metric("Saldo Cabang", rupiah(rak["sal_c"]))
             c2.metric("Saldo Pusat", rupiah(rak["sal_p"]))
             c3.metric("Selisih", rupiah(rak["selisih"]))
-            t1, t2, t3 = st.tabs(["🔴 Selisih", "❌ Salah Posisi", "✅ Matched"])
+            t1, t2 = st.tabs(["🔴 Selisih & Unmatched", "✅ Matched"])
             with t1: st.dataframe(pd.concat([rak["un_c"], rak["un_p"]]), use_container_width=True)
-            with t3: st.dataframe(rak["matched"], use_container_width=True)
+            with t2: st.dataframe(rak["matched"], use_container_width=True)
 
-        st.subheader("② Edit Data")
+        st.subheader("② Pratinjau & Edit Data Jurnal")
         st.session_state.df = st.data_editor(st.session_state.df, num_rows="dynamic", use_container_width=True)
         
         st.divider()
