@@ -147,9 +147,7 @@ def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
         nama_val = str(r.get("Nama Perkiraan", "")).strip()
         uraian_val = str(r.get("Uraian", "")).strip()
         
-        if bukti_val in ["ACC-NEW", "UNASSIGNED", ""] and to_num(r.get("Debet", 0)) == 0.0 and to_num(r.get("Kredit", 0)) == 0.0:
-            return False
-            
+        # PERBAIKAN: Membuang kata kunci 'total' & 'jumlah' agar baris rekapitulasi Excel terbuang otomatis!
         combined_text = f"{kd_val} {bukti_val} {nama_val} {uraian_val}".lower()
         ignore_keywords = [
             "ksp cu", "jl. jendral", "periode:", "catatan:", "direverifikasi", 
@@ -268,7 +266,6 @@ def perform_rak_reconciliation(df_all):
     df_a = df_all[df_all["Source_File"] == files[0]].copy().reset_index(drop=True)
     df_b = df_all[df_all["Source_File"] == files[1]].copy().reset_index(drop=True)
 
-    # Identifikasi mana Cabang mana Pusat
     if "pusat" in files[1].lower() or "20504" in str(df_b["Kode Perkiraan"].values):
         df_cabang, df_pusat = df_a, df_b
         name_cabang, name_pusat = files[0], files[1]
@@ -289,7 +286,6 @@ def perform_rak_reconciliation(df_all):
 
     selisih_akhir = sal_pusat - sal_cabang
 
-    # Matching Analysis
     matched_results = []
     unmatched_cabang = []
     unmatched_pusat = []
@@ -306,7 +302,6 @@ def perform_rak_reconciliation(df_all):
             if idx_p in pusat_used:
                 continue
 
-            # Kasus Normal Cermin: Kredit Cabang == Debet Pusat
             if val_c_kred > 0 and abs(val_c_kred - row_p["Debet"]) < 1.0:
                 matched_results.append({
                     "Uraian Transaksi": row_c["Uraian"],
@@ -319,7 +314,6 @@ def perform_rak_reconciliation(df_all):
                 found = True
                 break
 
-            # Kasus Normal Cermin: Debet Cabang == Kredit Pusat
             elif val_c_deb > 0 and abs(val_c_deb - row_p["Kredit"]) < 1.0:
                 matched_results.append({
                     "Uraian Transaksi": row_c["Uraian"],
@@ -332,7 +326,6 @@ def perform_rak_reconciliation(df_all):
                 found = True
                 break
 
-            # Kasus Salah Posisi: Sama-sama Debet
             elif val_c_deb > 0 and abs(val_c_deb - row_p["Debet"]) < 1.0:
                 wrong_side.append({
                     "Uraian Transaksi": row_c["Uraian"],
@@ -607,7 +600,6 @@ def main():
                 st.session_state.file_base_name = os.path.splitext(raw_fname)[0]
                 init_history(combined_df)
                 
-                # Jalankan Engine RAK Jika Unggah >= 2 File
                 if len(all_frames) >= 2:
                     st.session_state.rak_res = perform_rak_reconciliation(combined_df)
                 else:
@@ -620,7 +612,6 @@ def main():
     if "df_raw" in st.session_state and st.session_state.df_raw is not None:
         init_history(st.session_state.df_raw)
 
-        # ---------- SEKSI KHUSUS REKONSILIASI RAK (CABANG VS PUSAT) ----------
         if st.session_state.get("rak_res") is not None:
             rak = st.session_state.rak_res
             st.divider()
