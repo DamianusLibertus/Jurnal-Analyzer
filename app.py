@@ -77,8 +77,15 @@ def universal_clean_and_parse(df_raw: pd.DataFrame):
     df = df_raw.copy()
     df = df.dropna(how='all')
     
+    # Ekstraksi nilai Saldo Awal jika ada di header/baris atas (khusus mode Ledger)
+    saldo_awal_val = 0.0
     for idx, row in df.head(10).iterrows():
         row_str = " ".join([str(val) for val in row.values if pd.notna(val)]).lower()
+        if "saldo awal" in row_str:
+            for val in row.values:
+                num = to_num(val)
+                if num != 0.0:
+                    saldo_awal_val = num
         if ("debet" in row_str or "deb" in row_str) and ("kredit" in row_str or "kred" in row_str):
             df.columns = [str(val).strip() for val in row.values]
             df = df.iloc[idx+1:].reset_index(drop=True)
@@ -120,6 +127,8 @@ def universal_clean_and_parse(df_raw: pd.DataFrame):
             target = 'Debet'
         elif (cl.startswith('kredit') or cl.startswith('kred') or 'kredit' in cl) and 'Kredit' not in assigned_targets:
             target = 'Kredit'
+        elif 'saldo' in cl and 'Saldo' not in assigned_targets:
+            target = 'Saldo'
             
         if target:
             col_map[c] = target
@@ -131,7 +140,9 @@ def universal_clean_and_parse(df_raw: pd.DataFrame):
         if col not in df.columns:
             df[col] = ""
 
-    df = df[STD_COLS].copy()
+    # Jika ada kolom Saldo, pertahankan
+    cols_to_keep = STD_COLS + (["Saldo"] if "Saldo" in df.columns else [])
+    df = df[cols_to_keep].copy()
 
     def is_valid_transaction_row(r):
         kd_val = str(r.get("KD", "")).strip()
@@ -165,7 +176,10 @@ def universal_clean_and_parse(df_raw: pd.DataFrame):
 
     df["Debet"] = df["Debet"].apply(to_num)
     df["Kredit"] = df["Kredit"].apply(to_num)
+    if "Saldo" in df.columns:
+        df["Saldo"] = df["Saldo"].apply(to_num)
 
+    df.attrs["saldo_awal"] = saldo_awal_val
     return df, detected_mode
 
 def process_uploaded_file(uploaded_file):
@@ -257,6 +271,7 @@ def compute_jurnal(df: pd.DataFrame, report_mode: str):
             "total_kredit": 0.0,
             "selisih": 0.0,
             "balanced": True,
+            "status_label": "VALID (NOMINATIF)",
             "mode": "nominatif"
         }
         return df, totals
@@ -265,11 +280,24 @@ def compute_jurnal(df: pd.DataFrame, report_mode: str):
         diff = round(total_debet - total_kredit, 2)
         df["_Selisih_Bukti"] = 0.0
         df["Penyebab Selisih"] = ""
+        
+        # Validasi Saldo Buku Besar: Saldo Akhir == Saldo Awal + Debet - Kredit
+        is_ledger_valid = True
+        if "Saldo" in df.columns and len(df) > 0:
+            last_saldo = float(df["Saldo"].iloc[-1])
+            saldo_awal = df.attrs.get("saldo_awal", 0.0)
+            if saldo_awal == 0.0 and len(df) > 1:
+                # Estimasi jika Saldo Awal dihitung dari baris pertama
+                saldo_awal = float(df["Saldo"].iloc[0]) - float(df["Debet"].iloc[0]) + float(df["Kredit"].iloc[0])
+            expected_saldo = round(saldo_awal + total_debet - total_kredit, 2)
+            is_ledger_valid = abs(last_saldo - expected_saldo) < 1.0
+
         totals = {
             "total_debet": total_debet,
             "total_kredit": total_kredit,
             "selisih": diff,
-            "balanced": abs(diff) < 1.0,  # FIX: Evaluasi ke seimbang hanya jika selisih < 1.0
+            "balanced": is_ledger_valid,
+            "status_label": "VALID (SALDO BUKU BESAR PAS) ✅" if is_ledger_valid else "SALDO TIDAK MATCH ⚠️",
             "mode": "ledger"
         }
         return df, totals
@@ -299,11 +327,14 @@ def compute_jurnal(df: pd.DataFrame, report_mode: str):
         df["_Selisih_Bukti"] = df["_Bukti_Group"].map(group_totals["_Group_Diff"])
         df["Penyebab Selisih"] = df["_Bukti_Group"].map(group_totals["_Penyebab_Selisih"])
 
+        is_balanced = abs(diff) < 1.0 and (group_totals["_Group_Diff"].abs() < 1.0).all()
+
         totals = {
             "total_debet": total_debet,
             "total_kredit": total_kredit,
             "selisih": diff,
-            "balanced": abs(diff) < 1.0 and (group_totals["_Group_Diff"].abs() < 1.0).all(),
+            "balanced": is_balanced,
+            "status_label": "SEIMBANG ✅" if is_balanced else "TIDAK SEIMBANG ⚠️",
             "mode": "jurnal"
         }
         return df, totals
@@ -338,24 +369,28 @@ def build_pdf_report(df, totals, report_name=""):
     elements.append(Spacer(1, 4))
 
     mode = totals.get("mode")
-    status_text = "<b>SEIMBANG & LENGKAP</b>" if totals["balanced"] else "<font color='red'><b>PERHATIAN (ADA SELISIH)</b></font>"
+    status_pdf = totals.get("status_label", "VALID")
+    if not totals["balanced"]:
+        status_pdf = f"<font color='red'><b>{status_pdf}</b></font>"
+    else:
+        status_pdf = f"<b>{status_pdf}</b>"
     
     if mode == "nominatif":
         summary_data = [
             [Paragraph("<b>Total Rekapitulasi Saldo / Nominal</b>", th_style), Paragraph("<b>Status Laporan</b>", th_style)],
-            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph("<b>LAPORAN SALDO VALID (NOMINATIF)</b>", td_style)]
+            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(status_pdf, td_style)]
         ]
         t_sum = Table(summary_data, colWidths=[130*mm, 145*mm])
     elif mode == "ledger":
         summary_data = [
-            [Paragraph("<b>Total Debet (Masuk)</b>", th_style), Paragraph("<b>Total Kredit (Keluar)</b>", th_style), Paragraph("<b>Mutasi / Selisih Netto</b>", th_style), Paragraph("<b>Status Buku Kas</b>", th_style)],
-            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph(status_text, td_style)]
+            [Paragraph("<b>Total Debet (Masuk)</b>", th_style), Paragraph("<b>Total Kredit (Keluar)</b>", th_style), Paragraph("<b>Mutasi Netto</b>", th_style), Paragraph("<b>Status Buku Besar</b>", th_style)],
+            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph(status_pdf, td_style)]
         ]
         t_sum = Table(summary_data, colWidths=[65*mm, 65*mm, 65*mm, 60*mm])
     else:
         summary_data = [
             [Paragraph("<b>Total Debet</b>", th_style), Paragraph("<b>Total Kredit</b>", th_style), Paragraph("<b>Selisih Total</b>", th_style), Paragraph("<b>Status Jurnal</b>", th_style)],
-            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph(status_text, td_style)]
+            [Paragraph(rupiah(totals["total_debet"]), td_style), Paragraph(rupiah(totals["total_kredit"]), td_style), Paragraph(rupiah(totals["selisih"]), td_style), Paragraph(status_pdf, td_style)]
         ]
         t_sum = Table(summary_data, colWidths=[65*mm, 65*mm, 65*mm, 60*mm])
 
@@ -392,7 +427,7 @@ def build_pdf_report(df, totals, report_name=""):
         row_cells = []
         for col in display_cols:
             val = r.get(col, "")
-            if col in ["Debet", "Kredit"]:
+            if col in ["Debet", "Kredit", "Saldo"]:
                 val_num = to_num(val)
                 cell_text = rupiah(val_num) if val_num != 0 or val != "" else "Rp 0,00"
                 row_cells.append(Paragraph(cell_text, td_right))
@@ -401,10 +436,8 @@ def build_pdf_report(df, totals, report_name=""):
             
         rows_table.append(row_cells)
 
-    col_widths = [15*mm, 30*mm, 25*mm, 55*mm, 85*mm, 32.5*mm, 32.5*mm]
-    if len(display_cols) != len(col_widths):
-        page_width = 275 * mm
-        col_widths = [page_width / len(display_cols)] * len(display_cols)
+    page_width = 275 * mm
+    col_widths = [page_width / len(display_cols)] * len(display_cols)
 
     t_detail = Table(rows_table, colWidths=col_widths, repeatRows=1)
     t_detail.setStyle(TableStyle(pdf_table_styles))
@@ -557,7 +590,9 @@ def main():
         c1.metric("Total Debet", rupiah(totals["total_debet"]))
         c2.metric("Total Kredit", rupiah(totals["total_kredit"]))
         c3.metric("Selisih / Mutasi Netto", rupiah(totals["selisih"]))
-        c4.metric("Status Laporan", "SEIMBANG ✅" if totals["balanced"] else "TIDAK SEIMBANG ⚠️")
+        
+        status_text = totals.get("status_label", "VALID ✅")
+        c4.metric("Status Laporan", status_text)
 
         st.subheader("④ Tabel Rincian Data")
 
@@ -567,12 +602,14 @@ def main():
             return [''] * len(row)
 
         display_cols = [c for c in df.columns if not c.startswith("_")]
+        
+        format_dict = {"Debet": "{:,.2f}", "Kredit": "{:,.2f}"}
+        if "Saldo" in display_cols:
+            format_dict["Saldo"] = "{:,.2f}"
+
         styled_df = df[display_cols].style.apply(
             highlight_unbalanced_voucher, axis=1
-        ).format({
-            "Debet": "{:,.2f}",
-            "Kredit": "{:,.2f}"
-        }, na_rep="")
+        ).format(format_dict, na_rep="")
 
         st.dataframe(styled_df, use_container_width=True)
 
