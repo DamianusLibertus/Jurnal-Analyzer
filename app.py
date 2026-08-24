@@ -186,6 +186,17 @@ def build_pdf_report(df, rak):
         spaceAfter=12
     )
     
+    h2 = ParagraphStyle(
+        'Heading2Style',
+        parent=styles['Heading2'],
+        textColor=navy,
+        fontSize=11,
+        leading=15,
+        spaceBefore=10,
+        spaceAfter=6,
+        fontName='Helvetica-Bold'
+    )
+    
     cell_style = ParagraphStyle(
         'Cell',
         parent=styles['Normal'],
@@ -202,6 +213,15 @@ def build_pdf_report(df, rak):
         fontSize=8,
         leading=11,
         textColor=colors.white
+    )
+
+    body_style = ParagraphStyle(
+        'BodyStyle',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=12,
+        textColor=colors.HexColor('#1E293B'),
+        fontName='Helvetica'
     )
 
     elements.append(Paragraph(f"<b>{APP_TITLE}</b>", title_style))
@@ -226,9 +246,29 @@ def build_pdf_report(df, rak):
             ('BOTTOMPADDING', (0,0), (-1,-1), 5),
         ]))
         elements.append(t_sum)
+        elements.append(Spacer(1, 10))
+
+        # --- PENJELASAN OTOMATIS ANALISIS SELISIH RAK ---
+        elements.append(Paragraph("<b>Analisis & Penjelasan Penyebab Selisih RAK</b>", h2))
+        un_c_df = rak.get("un_c", pd.DataFrame())
+        un_p_df = rak.get("un_p", pd.DataFrame())
+        selisih_val = rak["selisih"]
+
+        if abs(selisih_val) < 1.0 and un_c_df.empty and un_p_df.empty:
+            exp_text = "• <b>Status Rekonsiliasi: SEIMBANG.</b> Saldo antara Kantor Cabang dan Kantor Pusat sudah klop dan cocok secara matematis. Tidak ditemukan transaksi gantung."
+        else:
+            exp_text = f"• <b>Total Selisih Tercatat: {rupiah(selisih_val)}.</b> Selisih ini timbul akibat adanya transaksi yang belum dicatat secara timbal balik (reciprocal) antara pembukuan Cabang dan Pusat.<br/>"
+            if not un_c_df.empty:
+                exp_text += f"• <b>Transaksi Belum Dicatat di Pusat ({len(un_c_df)} transaksi):</b> Terdapat transaksi di Cabang yang belum dijurnal/diakui oleh Kantor Pusat. Contoh uraian: <i>{un_c_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_c_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
+            if not un_p_df.empty:
+                exp_text += f"• <b>Transaksi Hanya Dicatat di Pusat ({len(un_p_df)} transaksi):</b> Terdapat transaksi mutasi/pengeluaran/penerimaan dari Pusat yang belum dimasukkan ke pembukuan Cabang. Contoh uraian: <i>{un_p_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_p_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
+            exp_text += "• <b>Rekomendasi Auditor:</b> Lakukan konfirmasi timbal balik dan buat jurnal penyesuaian (adjustment entries) untuk mencatat transaksi gantung tersebut agar posisi RAK kembali seimbang."
+
+        elements.append(Paragraph(exp_text, body_style))
         elements.append(Spacer(1, 12))
 
     if not df.empty:
+        elements.append(Paragraph("<b>Rincian Jurnal Transaksi</b>", h2))
         headers = [Paragraph(f"<b>{c}</b>", header_style) for c in df.columns]
         table_data = [headers]
         for _, row in df.iterrows():
@@ -269,7 +309,6 @@ def main():
                 st.rerun()
 
     if "df" in st.session_state and st.session_state.df is not None and not st.session_state.df.empty:
-        # Menampilkan Metrik RAK & Tab Rekonsiliasi jika data RAK tersedia
         if st.session_state.get("rak"):
             rak = st.session_state.rak
             c1, c2, c3 = st.columns(3)
@@ -282,7 +321,6 @@ def main():
 
         st.subheader("② Pratinjau & Edit Data Jurnal")
         
-        # Panel Fleksibel: Tambah/Hapus Kolom & Sisipkan Baris di Posisi Mana Saja
         with st.expander("🛠️ Panel Pengaturan Tabel (Kolom & Posisi Baris)", expanded=False):
             c1, c2, c3 = st.columns(3)
             with c1:
