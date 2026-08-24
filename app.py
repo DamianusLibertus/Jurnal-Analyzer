@@ -1,30 +1,37 @@
 # =========================================================
 # COPYRIGHT & LICENSE NOTICE
 # Copyright (c) 2026 Damianus Libertus. All Rights Reserved.
-# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Dynamic Rows)
+#
+# Application: Aplikasi Analisis Jurnal & Selisih Laporan
+# Owner: Damianus Libertus
+# Unauthorized copying, modification, or distribution of
+# this file via any medium is strictly prohibited.
 # =========================================================
 
 import os
 import re
 import io
+import json
+import uuid
+import base64
+import asyncio
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timezone
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib import colors
-from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-
 load_dotenv()
 
-APP_TITLE = "Aplikasi Analisis Jurnal & Rekonsiliasi"
+# ---------- Konfigurasi & konstanta ----------
+CURRENT_YEAR = datetime.now().year
+APP_TITLE = "Aplikasi Analisis Jurnal & Selisih Laporan"
 OWNER = "Damianus Libertus"
+EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+DB_NAME = os.environ.get("DB_NAME", "test_database")
+VISION_MODEL = "gpt-5.4"
 
 st.set_page_config(
     page_title=APP_TITLE,
@@ -32,195 +39,391 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+st.markdown("""
+    <style>
+    div[data-testid="stMetricValue"] {
+        color: #0f172a !important;
+        font-weight: bold !important;
+        background-color: #ffffff !important;
+        padding: 4px 8px !important;
+        border-radius: 4px !important;
+    }
+    div[data-testid="stMetricLabel"] {
+        color: #334155 !important;
+        font-weight: 600 !important;
+    }
+    div[data-testid="stMetric"] {
+        background-color: #ffffff !important;
+        padding: 12px !important;
+        border-radius: 8px !important;
+        border: 1px solid #cbd5e1 !important;
+        box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.05) !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-# ---------- UTILITY HELPERS ----------
+# ---------- MongoDB (history) ----------
+@st.cache_resource(show_spinner=False)
+def get_db():
+    try:
+        from pymongo import MongoClient
+        client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=2500)
+        client.admin.command("ping")
+        return client[DB_NAME]
+    except Exception:
+        return None
+
+
+def save_history(record: dict) -> bool:
+    db = get_db()
+    if db is None:
+        return False
+    try:
+        db["analisis_history"].insert_one(record)
+        return True
+    except Exception:
+        return False
+
+
+def load_history(limit: int = 50):
+    db = get_db()
+    if db is None:
+        return []
+    try:
+        cur = db["analisis_history"].find({}, {"_id": 0}).sort("timestamp", -1).limit(limit)
+        return list(cur)
+    except Exception:
+        return []
+
+
+def delete_history(record_id: str) -> bool:
+    db = get_db()
+    if db is None:
+        return False
+    try:
+        db["analisis_history"].delete_one({"id": record_id})
+        return True
+    except Exception:
+        return False
+
+
+def clear_history() -> bool:
+    db = get_db()
+    if db is None:
+        return False
+    try:
+        db["analisis_history"].delete_many({})
+        return True
+    except Exception:
+        return False
+
+
+# ---------- LLM helper (Emergent Universal Key) ----------
+def run_async(coro):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+async def _llm_call(system_message: str, text: str, images_b64=None, timeout: int = 600) -> str:
+    from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=str(uuid.uuid4()),
+        system_message=system_message,
+    ).with_model("openai", VISION_MODEL)
+    contents = [ImageContent(image_base64=b) for b in (images_b64 or [])]
+    msg = UserMessage(text=text, file_contents=contents) if contents else UserMessage(text=text)
+    resp = await asyncio.wait_for(chat.send_message(msg), timeout=timeout)
+    return resp if isinstance(resp, str) else str(resp)
+
+
+def llm_call(system_message: str, text: str, images_b64=None, timeout: int = 600) -> str:
+    return run_async(_llm_call(system_message, text, images_b64, timeout))
+
+
+def friendly_error(e) -> str:
+    m = str(e)
+    low = m.lower()
+    if "budget" in low or "exceeded" in low:
+        return "kuota AI (Universal Key) habis — silakan isi ulang saldo"
+    if "timeout" in low or "timed out" in low:
+        return "melebihi batas waktu pemrosesan"
+    if "cannot identify image" in low or "unidentified" in low:
+        return "file gambar tidak valid atau rusak"
+    if "rate limit" in low or "429" in low:
+        return "layanan AI sedang sibuk, coba lagi sebentar"
+    leak_tokens = ("litellm", "openaiexception", "badrequesterror", "traceback",
+                   "anthropic", "geminiexception", "current cost", "max budget")
+    if any(tok in low for tok in leak_tokens):
+        return "terjadi kendala pada layanan AI — silakan coba lagi"
+    return m[:160]
+
+
+# ---------- Utilitas ----------
 def to_num(x) -> float:
-    if x is None or pd.isna(x): return 0.0
-    if isinstance(x, (int, float)): return float(x)
+    if x is None:
+        return 0.0
+    if isinstance(x, (int, float)):
+        try:
+            return float(x)
+        except Exception:
+            return 0.0
     s = str(x).strip()
-    if s in ("", "-", "--", "nil", "null", "nan", "none", ".", "0.00", "0"): return 0.0
     neg = "(" in s and ")" in s
     s = re.sub(r"[^\d,.\-]", "", s)
+    if s in ("", "-", ".", ","):
+        return 0.0
     if "," in s and "." in s:
-        if s.rfind(",") > s.rfind("."): s = s.replace(".", "").replace(",", ".")
-        else: s = s.replace(",", "")
+        s = s.replace(".", "").replace(",", ".")
     elif "," in s:
-        parts = s.split(",")
-        if len(parts) == 2 and len(parts[1]) <= 2: s = s.replace(",", ".")
-        else: s = s.replace(",", "")
+        s = s.replace(",", ".")
     elif "." in s:
         parts = s.split(".")
-        if len(parts) > 2 or (len(parts) == 2 and len(parts[-1]) == 3 and len(parts[0]) <= 3): s = s.replace(".", "")
+        if len(parts) > 2 or (len(parts) == 2 and len(parts[-1]) == 3):
+            s = s.replace(".", "")
     try:
         v = float(s)
         return -abs(v) if neg else v
-    except Exception: return 0.0
+    except Exception:
+        return 0.0
+
 
 def rupiah(v: float) -> str:
-    try: return f"Rp {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    except Exception: return str(v)
-
-# ---------- UNIVERSAL CLEANING PARSER ----------
-STD_COLS = ["KD", "No. Bukti", "Kode Perkiraan", "Nama Perkiraan", "Uraian", "Debet", "Kredit"]
-
-def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
-    if df_raw is None or df_raw.empty: return pd.DataFrame(columns=STD_COLS), "unknown", 0.0
-    df = df_raw.copy().dropna(how='all')
-    saldo_awal_val = 0.0
-    for idx, row in df.head(15).iterrows():
-        row_str = " ".join([str(val) for val in row.values if pd.notna(val)]).lower()
-        if "saldo awal" in row_str:
-            for val in row.values:
-                num = to_num(val)
-                if num != 0.0: saldo_awal_val = num
-        if ("debet" in row_str or "deb" in row_str) and ("kredit" in row_str or "kred" in row_str):
-            df.columns = [str(val).strip() for val in row.values]
-            df = df.iloc[idx+1:].reset_index(drop=True)
-            break
-    
-    df.columns = [str(c).strip() for c in df.columns]
-    col_map = {}
-    assigned_targets = set()
-    for c in df.columns:
-        cl = c.strip().lower().replace("\n", " ")
-        target = None
-        if cl in ['kd', 'jenis', 'tipe', 'jurnal'] and 'KD' not in assigned_targets: target = 'KD'
-        elif ('bukti' in cl or 'ref' in cl) and 'No. Bukti' not in assigned_targets: target = 'No. Bukti'
-        elif ('kode' in cl and 'perkiraan' in cl) or cl == 'kode' and 'Kode Perkiraan' not in assigned_targets: target = 'Kode Perkiraan'
-        elif (('nama' in cl and 'perkiraan' in cl) or cl == 'akun') and 'Nama Perkiraan' not in assigned_targets: target = 'Nama Perkiraan'
-        elif ('uraian' in cl or 'keterangan' in cl or 'u r a i a n' in cl) and 'Uraian' not in assigned_targets: target = 'Uraian'
-        elif (cl.startswith('debet') or 'debet' in cl) and 'Debet' not in assigned_targets: target = 'Debet'
-        elif (cl.startswith('kredit') or 'kredit' in cl) and 'Kredit' not in assigned_targets: target = 'Kredit'
-        elif 'saldo' in cl and 'Saldo' not in assigned_targets: target = 'Saldo'
-        if target: col_map[c] = target; assigned_targets.add(target)
-    
-    df = df.rename(columns=col_map)
-    for col in STD_COLS:
-        if col not in df.columns: df[col] = ""
-    cols_to_keep = STD_COLS + (["Saldo"] if "Saldo" in df.columns else [])
-    df = df[cols_to_keep].copy()
-
-    clean_rows = []
-    for _, r in df.iterrows():
-        kd_val = str(r.get("KD", "")).lower().replace(" ", "")
-        bukti_val = str(r.get("No. Bukti", "")).lower().replace(" ", "")
-        uraian_val = str(r.get("Uraian", "")).lower().replace(" ", "")
-        if any(w in kd_val or w in bukti_val for w in ["jumlah", "tot"]) or uraian_val in ["jumlah", "total", "subtotal"]: continue
-        if to_num(r.get("Debet", 0)) == 0.0 and to_num(r.get("Kredit", 0)) == 0.0 and len(uraian_val) < 3: continue
-        clean_rows.append(r)
-        
-    df_filtered = pd.DataFrame(clean_rows).reset_index(drop=True) if clean_rows else pd.DataFrame(columns=cols_to_keep)
-    df_filtered["KD"] = df_filtered["KD"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("JU")
-    df_filtered["No. Bukti"] = df_filtered["No. Bukti"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("ACC-AUTO")
-    df_filtered["Uraian"] = df_filtered["Uraian"].replace(r'^\s*$', np.nan, regex=True).ffill().fillna("")
-    df_filtered["Debet"] = df_filtered["Debet"].apply(to_num)
-    df_filtered["Kredit"] = df_filtered["Kredit"].apply(to_num)
-    if "Saldo" in df_filtered.columns: df_filtered["Saldo"] = df_filtered["Saldo"].apply(to_num)
-    df_filtered["Source_File"] = filename
-    return df_filtered, "jurnal", saldo_awal_val
-
-def process_uploaded_file(uploaded_file):
-    fname = uploaded_file.name
-    file_bytes = uploaded_file.getvalue()
     try:
-        xls = pd.ExcelFile(BytesIO(file_bytes))
-        frames = []
-        for sh in xls.sheet_names:
-            df_sh = pd.read_excel(BytesIO(file_bytes), sheet_name=sh)
-            cleaned_df, _, _ = universal_clean_and_parse(df_sh, fname)
-            if not cleaned_df.empty: frames.append(cleaned_df)
-        if frames: return pd.concat(frames, ignore_index=True)
-    except: pass
-    return pd.DataFrame(columns=STD_COLS)
+        return f"Rp {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return str(v)
 
-# ---------- ENGINE RAK & PDF ----------
-def perform_rak_reconciliation(df_all):
-    files = df_all["Source_File"].unique()
-    if len(files) < 2: return None
-    df_a = df_all[df_all["Source_File"] == files[0]].copy().reset_index(drop=True)
-    df_b = df_all[df_all["Source_File"] == files[1]].copy().reset_index(drop=True)
-    if "pusat" in files[1].lower(): df_c, df_p = df_a, df_b
-    else: df_c, df_p = df_b, df_a
-    
-    sal_c = df_c["Debet"].sum() - df_c["Kredit"].sum()
-    sal_p = df_p["Debet"].sum() - df_p["Kredit"].sum()
-    
-    matched, un_c, un_p = [], [], []
-    p_used = set()
-    for _, row_c in df_c.iterrows():
-        found = False
-        for idx_p, row_p in df_p.iterrows():
-            if idx_p in p_used: continue
-            if abs(row_c['Kredit'] - row_p['Debet']) < 1.0 or abs(row_c['Debet'] - row_p['Kredit']) < 1.0:
-                matched.append({"Uraian": row_c["Uraian"], "Nominal": rupiah(row_c["Debet"] or row_c["Kredit"]), "Status": "COCOK"})
-                p_used.add(idx_p); found = True; break
-        if not found: un_c.append({"Uraian": row_c["Uraian"], "Nominal": rupiah(row_c["Debet"] or row_c["Kredit"]), "Status": "BELUM DI PUSAT"})
-    for idx_p, row_p in df_p.iterrows():
-        if idx_p not in p_used: un_p.append({"Uraian": row_p["Uraian"], "Nominal": rupiah(row_p["Debet"] or row_p["Kredit"]), "Status": "HANYA DI PUSAT"})
-    return {"sal_c": sal_c, "sal_p": sal_p, "selisih": sal_p - sal_c, "matched": pd.DataFrame(matched), "un_c": pd.DataFrame(un_c), "un_p": pd.DataFrame(un_p)}
 
-def build_pdf_report(df, rak):
+def img_to_b64(raw_bytes: bytes) -> str:
+    from PIL import Image
+    img = Image.open(BytesIO(raw_bytes)).convert("RGB")
+    max_dim = 2200
+    if max(img.size) > max_dim:
+        ratio = max_dim / max(img.size)
+        img = img.resize((int(img.size[0] * ratio), int(img.size[1] * ratio)))
     buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), topMargin=10*mm, bottomMargin=10*mm, leftMargin=10*mm, rightMargin=10*mm)
-    elements = []
-    styles = getSampleStyleSheet()
-    elements.append(Paragraph("<b>LAPORAN ANALISIS JURNAL & RAK</b>", styles["Title"]))
-    if rak:
-        data = [["Keterangan", "Nilai"], ["Saldo Cabang", rupiah(rak["sal_c"])], ["Saldo Pusat", rupiah(rak["sal_p"])], ["Selisih", rupiah(rak["selisih"])]]
-        elements.append(Table(data, style=[('GRID', (0,0), (-1,-1), 0.5, colors.black)]))
-    elements.append(Spacer(1, 12))
-    t = Table([df.columns.tolist()] + df.values.tolist(), style=[('GRID', (0,0), (-1,-1), 0.5, colors.grey)])
-    elements.append(t)
-    doc.build(elements)
-    return buf.getvalue()
+    img.save(buf, format="JPEG", quality=90)
+    return base64.b64encode(buf.getvalue()).decode()
 
-# ---------- ANTARMUKA UTAMA ----------
-def main():
-    st.markdown(f"# 📊 {APP_TITLE}")
-    up_files = st.file_uploader("Upload 2 file Excel", accept_multiple_files=True)
-    if st.button("🚀 Ekstrak & Analisis"):
-        if up_files and len(up_files) >= 2:
-            all_frames = [process_uploaded_file(f) for f in up_files]
-            st.session_state.df = pd.concat(all_frames, ignore_index=True)
-            st.session_state.rak = perform_rak_reconciliation(st.session_state.df)
-            st.rerun()
 
-    if "df" in st.session_state:
-        if st.session_state.get("rak"):
-            rak = st.session_state.rak
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Saldo Cabang", rupiah(rak["sal_c"]))
-            c2.metric("Saldo Pusat", rupiah(rak["sal_p"]))
-            c3.metric("Selisih", rupiah(rak["selisih"]))
-            t1, t2 = st.tabs(["🔴 Selisih & Unmatched", "✅ Matched"])
-            with t1: st.dataframe(pd.concat([rak["un_c"], rak["un_p"]]), use_container_width=True)
-            with t2: st.dataframe(rak["matched"], use_container_width=True)
+def pdf_to_b64_images(raw_bytes: bytes, max_pages: int = 6):
+    import fitz 
+    out = []
+    doc = fitz.open(stream=raw_bytes, filetype="pdf")
+    for page in doc[:max_pages]:
+        pix = page.get_pixmap(dpi=150)
+        out.append(base64.b64encode(pix.tobytes("png")).decode())
+    doc.close()
+    return out
 
-        st.subheader("② Pratinjau & Edit Data Jurnal")
-        
-        with st.expander("🛠️ Panel Pengaturan Kolom (Tambah / Hapus Kolom)", expanded=False):
-            c1, c2 = st.columns(2)
-            with c1:
-                col_add = st.text_input("Nama Kolom Baru:")
-                if st.button("➕ Tambah Kolom"):
-                    if col_add and col_add not in st.session_state.df.columns:
-                        st.session_state.df[col_add] = ""
-                        st.rerun()
-            with c2:
-                col_del = st.selectbox("Pilih Kolom Dihapus:", st.session_state.df.columns)
-                if st.button("🗑️ Hapus Kolom"):
-                    st.session_state.df = st.session_state.df.drop(columns=[col_del])
-                    st.rerun()
 
-        # Mengaktifkan baris dinamis penuh agar bisa tambah baris dengan leluasa
-        st.session_state.df = st.data_editor(st.session_state.df, num_rows="dynamic", use_container_width=True)
-        
-        st.divider()
-        e1, e2 = st.columns(2)
-        e1.download_button("🖨️ Cetak PDF", build_pdf_report(st.session_state.df, st.session_state.get("rak")), f"Laporan_Analisis_RAK_{datetime.now():%Y%m%d_%H%M}.pdf", "application/pdf", use_container_width=True)
-        buf = BytesIO()
-        with pd.ExcelWriter(buf) as w: st.session_state.df.to_excel(w, index=False)
-        e2.download_button("📊 Download Excel", buf.getvalue(), f"Hasil_Analisis_RAK_{datetime.now():%Y%m%d_%H%M}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+HEADER_COL_KW = ("akun", "uraian", "keterangan", "perkiraan", "nama akun", "debet",
+                 "debit", "kredit", "credit", "target", "realisasi", "item", "pos",
+                 "anggaran", "nominal")
+SIGN_KW = ("mengetahui", "menyetujui", "disetujui", "mengesahkan", "dibuat oleh",
+           "diperiksa", "disusun", "penyusun", "ketua", "wakil", "manajer", "manager",
+           "direktur", "direktris", "bendahara", "sekretaris", "kepala", "pimpinan",
+           "atasan", "nip", "nik", "tanda tangan", "ttd", "hormat kami", "stempel",
+           "materai", "pejabat", "auditor", "akuntan publik", "an.", "a.n.", "u.b.",
+           "mengesyahkan")
+CLOSING_KW = ("catatan:", "keterangan:", "demikian", "laporan ini", "dibuat dengan",
+              "*)", "**)", "disclaimer")
+HEADING_KW = ("halaman", "jurnal", "laporan", "periode", "page", "tanggal", "dibuat",
+              "perusahaan", "neraca", "buku besar", "hal.", "per ", "pemerintah",
+              "kementerian", "dinas", "yayasan", "koperasi", "cv ", "pt ", "ud ")
+MONTH_KW = ("januari", "februari", "maret", "april", "mei", "juni", "juli", "agustus",
+            "september", "oktober", "november", "desember", "january", "february",
+            "march", "june", "july", "august", "october", "december")
+ROW_NOISE_KW = ("total", "jumlah", "saldo awal", "saldo akhir", "sub total", "subtotal",
+                "grand total", "saldoawal", "saldoakhir", "mengetahui", "menyetujui",
+                "disetujui", "mengesahkan", "dibuat oleh", "diperiksa", "disusun",
+                "penyusun", "direktur", "bendahara", "sekretaris", "pimpinan",
+                "tanda tangan", "hormat kami", "nip", "nik")
 
-if __name__ == "__main__":
-    main()
+
+def _despace(s: str) -> str:
+    return re.sub(r"(?:\b[A-Za-z]\b\s*){2,}",
+                  lambda m: m.group(0).replace(" ", ""), str(s))
+
+
+def is_noise_label(label) -> bool:
+    low = _despace(str(label)).strip().lower()
+    if low in ("", "nan", "none"):
+        return True
+    return any(k in low for k in ROW_NOISE_KW)
+
+
+def clean_header(name) -> str:
+    s = str(name if name is not None else "").replace("\n", " ").strip()
+    tokens = s.split()
+    out, buf = [], []
+    for tok in tokens:
+        if len(tok) == 1 and tok.isalpha():
+            buf.append(tok)
+        else:
+            if buf:
+                out.append("".join(buf)); buf = []
+            out.append(tok)
+    if buf:
+        out.append("".join(buf))
+    return " ".join(out).strip()
+
+
+DATE_RE = re.compile(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b")
+CODE_RE = re.compile(r"\b(?:JU|TAB|OB|COA|BKK|BKM|KK|KM|ACC[-.]?\w*|TAB\.?\w*|[A-Z]{2,4}[-.]?\d[\w-]*)\b")
+
+
+def _clean_label(line: str) -> str:
+    s = DATE_RE.sub(" ", str(line))
+    s = CODE_RE.sub(" ", s)
+    s = re.sub(r"\(?-?\d[\d.,]*\)?", " ", s)
+    s = re.sub(r"[|:]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip(" .-,")
+
+
+def _is_noise_line(low: str) -> bool:
+    low = _despace(low).lower()
+    if any(k in low for k in HEADING_KW):
+        return True
+    if any(k in low for k in ("total", "jumlah", "saldo akhir", "saldo awal", "saldoakhir", "saldoawal")):
+        return True
+    if any(k in low for k in SIGN_KW) or any(k in low for k in CLOSING_KW):
+        return True
+    if any(m in low for m in MONTH_KW) and re.search(r"\b\d{4}\b", low):
+        return True
+    return False
+
+
+def parse_text_rows(text: str, mode: str) -> pd.DataFrame:
+    lines = [ln.strip() for ln in (text or "").splitlines()]
+    num_re = re.compile(r"\(?-?[\d][\d.,]*\)?")
+    start = 0
+    for i, ln in enumerate(lines):
+        if sum(1 for k in HEADER_COL_KW if k in ln.lower()) >= 2:
+            start = i + 1
+            break
+
+    rows = []
+    pending = []
+    for raw_line in lines[start:]:
+        line = raw_line
+        if not line:
+            continue
+        low = line.lower()
+        nums = num_re.findall(line)
+        amts = [to_num(t) for t in nums if is_amount_token(t)]
+
+        if not amts:
+            if _is_noise_line(low):
+                pending = []
+            else:
+                desc = _clean_label(line)
+                if desc:
+                    pending.append(desc)
+            continue
+
+        line_label = _clean_label(line)
+        lbl_ds = _despace(line_label).lower().strip()
+        if lbl_ds in ("total", "jumlah", "saldo", "saldo akhir", "saldo awal",
+                      "saldoakhir", "saldoawal") or (
+            any(lbl_ds.startswith(k) for k in ("total", "jumlah", "saldo")) and len(lbl_ds) <= 14):
+            pending = []
+            continue
+
+        strong = len(re.sub(r"[^A-Za-z]", "", line_label)) >= 4
+        if strong:
+            label = (line_label + " " + " ".join(pending)).strip() if pending else line_label
+        else:
+            label = " ".join(pending).strip() or line_label or "(tanpa keterangan)"
+        pending = []
+        label = label[:150]
+
+        if mode == "jurnal":
+            if len(amts) >= 3:
+                debet, kredit = amts[-3], amts[-2]
+            elif len(amts) == 2:
+                debet, kredit = amts[-2], amts[-1]
+            else:
+                debet, kredit = amts[0], 0.0
+            if debet == 0 and kredit == 0:
+                continue
+            rows.append({"Akun": label, "Debet": debet, "Kredit": kredit})
+        else:
+            if len(amts) >= 2:
+                target, real = amts[-2], amts[-1]
+            else:
+                target, real = amts[0], 0.0
+            if target == 0 and real == 0:
+                continue
+            rows.append({"Item": label, "Target": target, "Realisasi": real})
+    return pd.DataFrame(rows)
+
+
+def is_amount_token(tok: str) -> bool:
+    t = str(tok).strip().strip("()")
+    if t in ("0", "-0"):
+        return True
+    if re.fullmatch(r"-?\d{1,3}(\.\d{3})*,\d+", t):
+        return True
+    if re.fullmatch(r"-?\d{1,3}(\.\d{3})+", t):
+        return True
+    if re.fullmatch(r"-?\d+,\d+", t):
+        return True
+    return False
+
+
+def pdf_extract_direct(raw_bytes: bytes, mode: str, max_pages: int = 30) -> pd.DataFrame:
+    import pdfplumber
+    text_accum = []
+    table_frames = []
+    with pdfplumber.open(BytesIO(raw_bytes)) as pdf:
+        for page in pdf.pages[:max_pages]:
+            txt = page.extract_text() or ""
+            if txt:
+                text_accum.append(txt)
+            for tbl in (page.extract_tables() or []):
+                if not tbl or len(tbl) < 2:
+                    continue
+                header = [str(c).strip() if c else "" for c in tbl[0]]
+                body = [r for r in tbl[1:] if any(c not in (None, "") for c in r)]
+                if body:
+                    table_frames.append(pd.DataFrame(body, columns=header))
+
+    text_df = parse_text_rows("\n".join(text_accum), mode)
+    if text_df is not None and not text_df.empty:
+        return text_df.reset_index(drop=True)
+
+    parts = []
+    for f in table_frames:
+        nf = normalize_df(f, mode)
+        if nf is not None and not nf.empty:
+            parts.append(nf)
+    if parts:
+        return pd.concat(parts, ignore_index=True)
+    return pd.DataFrame()
+
+
+def has_tesseract() -> bool:
+    import shutil
+    return shutil.which("tesseract") is not None
+
+
+def ocr_image_direct(raw_bytes: bytes, mode: str) -> pd.DataFrame:
+    import pytesseract
+    from PIL import Image
+    img = Image.open(BytesIO(raw_bytes)).convert("RGB")
+    text = pytesseract.image_to_string(img, lang="ind+eng")
+    return parse_text_rows(text, mode)
+
+
+def extract_json(text: str):
+    if not text:
+        return None
+    t = text.strip()
+    t = re.sub(r"^```(?:json)?", "", t).strip()
+    t = re.sub(r"
