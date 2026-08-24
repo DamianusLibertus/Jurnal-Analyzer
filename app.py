@@ -7,12 +7,8 @@
 import os
 import re
 import io
-import json
-import uuid
-import base64
-import asyncio
 from io import BytesIO
-from datetime import datetime, timezone
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -21,13 +17,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CURRENT_YEAR = datetime.now().year
 APP_TITLE = "Aplikasi Analisis Jurnal & Rekonsiliasi"
 OWNER = "Damianus Libertus"
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
-MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = os.environ.get("DB_NAME", "test_database")
-VISION_MODEL = "gpt-5.4"
+CURRENT_YEAR = datetime.now().year
 
 st.set_page_config(
     page_title=APP_TITLE,
@@ -35,71 +27,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-st.markdown("""
-    <style>
-    div[data-testid="stMetricValue"] {
-        color: #0f172a !important;
-        font-weight: bold !important;
-        background-color: #ffffff !important;
-        padding: 4px 8px !important;
-        border-radius: 4px !important;
-    }
-    div[data-testid="stMetricLabel"] {
-        color: #334155 !important;
-        font-weight: 600 !important;
-    }
-    div[data-testid="stMetric"] {
-        background-color: #ffffff !important;
-        padding: 12px !important;
-        border-radius: 8px !important;
-        border: 1px solid #cbd5e1 !important;
-        box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.05) !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# ---------- MongoDB (history) ----------
-@st.cache_resource(show_spinner=False)
-def get_db():
-    try:
-        from pymongo import MongoClient
-        client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=2500)
-        client.admin.command("ping")
-        return client[DB_NAME]
-    except Exception:
-        return None
-
-def save_history(record: dict) -> bool:
-    db = get_db()
-    if db is None: return False
-    try:
-        db["analisis_history"].insert_one(record)
-        return True
-    except Exception: return False
-
-def load_history(limit: int = 50):
-    db = get_db()
-    if db is None: return []
-    try:
-        cur = db["analisis_history"].find({}, {"_id": 0}).sort("timestamp", -1).limit(limit)
-        return list(cur)
-    except Exception: return []
-
-def delete_history(record_id: str) -> bool:
-    db = get_db()
-    if db is None: return False
-    try:
-        db["analisis_history"].delete_one({"id": record_id})
-        return True
-    except Exception: return False
-
-def clear_history() -> bool:
-    db = get_db()
-    if db is None: return False
-    try:
-        db["analisis_history"].delete_many({})
-        return True
-    except Exception: return False
 
 # ---------- UTILITY HELPERS ----------
 def to_num(x) -> float:
@@ -128,7 +55,7 @@ def rupiah(v: float) -> str:
     try: return f"Rp {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception: return str(v)
 
-# ---------- UNIVERSAL CLEANING PARSER (VERSI ASLI ANDA) ----------
+# ---------- UNIVERSAL CLEANING PARSER ----------
 STD_COLS = ["KD", "No. Bukti", "Kode Perkiraan", "Nama Perkiraan", "Uraian", "Debet", "Kredit"]
 
 def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
@@ -201,7 +128,7 @@ def process_uploaded_file(uploaded_file):
     except: pass
     return pd.DataFrame(columns=STD_COLS)
 
-# ---------- ENGINE RAK & REKONSILIASI ----------
+# ---------- ENGINE RAK & PDF ----------
 def perform_rak_reconciliation(df_all):
     if "Source_File" not in df_all.columns: return None
     files = df_all["Source_File"].unique()
@@ -228,7 +155,6 @@ def perform_rak_reconciliation(df_all):
         if idx_p not in p_used: un_p.append({"Uraian": row_p["Uraian"], "Nominal": rupiah(row_p["Debet"] or row_p["Kredit"]), "Status": "HANYA DI PUSAT"})
     return {"sal_c": sal_c, "sal_p": sal_p, "selisih": sal_p - sal_c, "matched": pd.DataFrame(matched), "un_c": pd.DataFrame(un_c), "un_p": pd.DataFrame(un_p)}
 
-# ---------- BUILD PDF LAPORAN YANG RAPI & BERSIH ----------
 def build_pdf_report(df, rak):
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib import colors
@@ -328,20 +254,10 @@ def build_pdf_report(df, rak):
     doc.build(elements)
     return buf.getvalue()
 
-def inject_css():
-    st.markdown("""
-        <style>
-        [data-testid="stMetricLabel"] { color: #1E293B !important; font-weight: 700 !important; }
-        [data-testid="stMetricValue"] { color: #0F172A !important; font-weight: 800 !important; }
-        </style>
-    """, unsafe_allow_html=True)
-
-# ---------- ANTARMUKA UTAMA (STREAMLIT) ----------
+# ---------- ANTARMUKA UTAMA ----------
 def main():
-    inject_css()
     st.markdown(f"# 📊 {APP_TITLE}")
-    
-    up_files = st.file_uploader("Upload file Excel (bisa lebih dari satu)", accept_multiple_files=True, type=["xlsx", "xls", "csv"])
+    up_files = st.file_uploader("Upload file Excel", accept_multiple_files=True, type=["xlsx", "xls", "csv"])
     if st.button("🚀 Ekstrak & Analisis", type="primary"):
         if up_files and len(up_files) >= 1:
             all_frames = [process_uploaded_file(f) for f in up_files]
@@ -351,24 +267,13 @@ def main():
                 st.session_state.rak = perform_rak_reconciliation(combined)
                 st.success(f"Berhasil mengekstrak {len(combined)} baris data!")
                 st.rerun()
-            else:
-                st.error("Gagal mengekstrak data dari file yang diunggah.")
 
     if "df" in st.session_state and st.session_state.df is not None and not st.session_state.df.empty:
-        if st.session_state.get("rak"):
-            rak = st.session_state.rak
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Saldo Cabang", rupiah(rak["sal_c"]))
-            c2.metric("Saldo Pusat", rupiah(rak["sal_p"]))
-            c3.metric("Selisih", rupiah(rak["selisih"]))
-            t1, t2 = st.tabs(["🔴 Selisih & Unmatched", "✅ Matched"])
-            with t1: st.dataframe(pd.concat([rak["un_c"], rak["un_p"]]), use_container_width=True)
-            with t2: st.dataframe(rak["matched"], use_container_width=True)
-
         st.subheader("② Pratinjau & Edit Data Jurnal")
-         
-        with st.expander("🛠️ Panel Pengaturan Kolom (Tambah / Hapus Kolom)", expanded=False):
-            c1, c2 = st.columns(2)
+        
+        # Panel Fleksibel: Tambah/Hapus Kolom & Sisipkan Baris di Posisi Mana Saja
+        with st.expander("🛠️ Panel Pengaturan Tabel (Kolom & Posisi Baris)", expanded=False):
+            c1, c2, c3 = st.columns(3)
             with c1:
                 col_add = st.text_input("Nama Kolom Baru:")
                 if st.button("➕ Tambah Kolom"):
@@ -380,7 +285,20 @@ def main():
                 if st.button("🗑️ Hapus Kolom"):
                     st.session_state.df = st.session_state.df.drop(columns=[col_del])
                     st.rerun()
+            with c3:
+                insert_idx = st.number_input("Sisipkan baris setelah indeks ke-:", min_value=0, max_value=max(0, len(st.session_state.df)-1), step=1)
+                if st.button("📍 Sisipkan Baris Baru"):
+                    new_row = {c: ("" if c not in ["Debet", "Kredit", "Saldo"] else 0.0) for c in st.session_state.df.columns}
+                    # Sisipkan baris di indeks pilihan
+                    idx_int = int(insert_idx)
+                    df_top = st.session_state.df.iloc[:idx_int+1]
+                    df_bottom = st.session_state.df.iloc[idx_int+1:]
+                    df_new_row = pd.DataFrame([new_row])
+                    st.session_state.df = pd.concat([df_top, df_new_row, df_bottom], ignore_index=True)
+                    st.success(f"Baris berhasil disisipkan setelah indeks {idx_int}!")
+                    st.rerun()
 
+        # Editor data interaktif (bisa edit langsung & tambah baris di bawah)
         st.session_state.df = st.data_editor(st.session_state.df, num_rows="dynamic", use_container_width=True)
          
         st.divider()
