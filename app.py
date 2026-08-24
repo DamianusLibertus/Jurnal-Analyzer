@@ -269,6 +269,17 @@ def main():
                 st.rerun()
 
     if "df" in st.session_state and st.session_state.df is not None and not st.session_state.df.empty:
+        # Menampilkan Metrik RAK & Tab Rekonsiliasi jika data RAK tersedia
+        if st.session_state.get("rak"):
+            rak = st.session_state.rak
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Saldo Cabang", rupiah(rak["sal_c"]))
+            c2.metric("Saldo Pusat", rupiah(rak["sal_p"]))
+            c3.metric("Selisih", rupiah(rak["selisih"]))
+            t1, t2 = st.tabs(["🔴 Selisih & Unmatched", "✅ Matched"])
+            with t1: st.dataframe(pd.concat([rak["un_c"], rak["un_p"]]), use_container_width=True)
+            with t2: st.dataframe(rak["matched"], use_container_width=True)
+
         st.subheader("② Pratinjau & Edit Data Jurnal")
         
         # Panel Fleksibel: Tambah/Hapus Kolom & Sisipkan Baris di Posisi Mana Saja
@@ -289,7 +300,6 @@ def main():
                 insert_idx = st.number_input("Sisipkan baris setelah indeks ke-:", min_value=0, max_value=max(0, len(st.session_state.df)-1), step=1)
                 if st.button("📍 Sisipkan Baris Baru"):
                     new_row = {c: ("" if c not in ["Debet", "Kredit", "Saldo"] else 0.0) for c in st.session_state.df.columns}
-                    # Sisipkan baris di indeks pilihan
                     idx_int = int(insert_idx)
                     df_top = st.session_state.df.iloc[:idx_int+1]
                     df_bottom = st.session_state.df.iloc[idx_int+1:]
@@ -298,7 +308,6 @@ def main():
                     st.success(f"Baris berhasil disisipkan setelah indeks {idx_int}!")
                     st.rerun()
 
-        # Editor data interaktif (bisa edit langsung & tambah baris di bawah)
         st.session_state.df = st.data_editor(st.session_state.df, num_rows="dynamic", use_container_width=True)
          
         st.divider()
