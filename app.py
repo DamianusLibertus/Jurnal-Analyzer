@@ -205,6 +205,15 @@ def build_pdf_report(df, rak):
         leading=11,
         textColor=colors.HexColor('#374151')
     )
+
+    cell_red_style = ParagraphStyle(
+        'CellRed',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=8,
+        leading=11,
+        textColor=colors.HexColor('#DC2626')
+    )
     
     header_style = ParagraphStyle(
         'HeaderCell',
@@ -248,31 +257,47 @@ def build_pdf_report(df, rak):
         elements.append(t_sum)
         elements.append(Spacer(1, 10))
 
-        # --- PENJELASAN OTOMATIS ANALISIS SELISIH RAK ---
         elements.append(Paragraph("<b>Analisis & Penjelasan Penyebab Selisih RAK</b>", h2))
         un_c_df = rak.get("un_c", pd.DataFrame())
         un_p_df = rak.get("un_p", pd.DataFrame())
         selisih_val = rak["selisih"]
 
         if abs(selisih_val) < 1.0 and un_c_df.empty and un_p_df.empty:
-            exp_text = "• <b>Status Rekonsiliasi: SEIMBANG.</b> Saldo antara Kantor Cabang dan Kantor Pusat sudah klop dan cocok secara matematis. Tidak ditemukan transaksi gantung."
+            exp_text = "• <b>Status Rekonsiliasi: SEIMBANG.</b> Saldo antara Kantor Cabang dan Kantor Pusat sudah klop dan cocok secara matematis."
         else:
-            exp_text = f"• <b>Total Selisih Tercatat: {rupiah(selisih_val)}.</b> Selisih ini timbul akibat adanya transaksi yang belum dicatat secara timbal balik (reciprocal) antara pembukuan Cabang dan Pusat.<br/>"
+            exp_text = f"• <b>Total Selisih Tercatat: {rupiah(selisih_val)}.</b> Selisih ini timbul akibat adanya transaksi gantung yang belum dicatat secara timbal balik.<br/>"
             if not un_c_df.empty:
-                exp_text += f"• <b>Transaksi Belum Dicatat di Pusat ({len(un_c_df)} transaksi):</b> Terdapat transaksi di Cabang yang belum dijurnal/diakui oleh Kantor Pusat. Contoh uraian: <i>{un_c_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_c_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
+                exp_text += f"• <b>Transaksi Belum Dicatat di Pusat ({len(un_c_df)} transaksi):</b> Contoh uraian: <i>{un_c_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_c_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
             if not un_p_df.empty:
-                exp_text += f"• <b>Transaksi Hanya Dicatat di Pusat ({len(un_p_df)} transaksi):</b> Terdapat transaksi mutasi/pengeluaran/penerimaan dari Pusat yang belum dimasukkan ke pembukuan Cabang. Contoh uraian: <i>{un_p_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_p_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
-            exp_text += "• <b>Rekomendasi Auditor:</b> Lakukan konfirmasi timbal balik dan buat jurnal penyesuaian (adjustment entries) untuk mencatat transaksi gantung tersebut agar posisi RAK kembali seimbang."
+                exp_text += f"• <b>Transaksi Belum Dicatat di Cabang ({len(un_p_df)} transaksi):</b> Contoh uraian: <i>{un_p_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_p_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
+            exp_text += "• <b>Rekomendasi Auditor:</b> Lakukan konfirmasi timbal balik dan buat jurnal penyesuaian (adjustment entries) untuk mencatat transaksi tersebut."
 
         elements.append(Paragraph(exp_text, body_style))
         elements.append(Spacer(1, 12))
 
     if not df.empty:
-        elements.append(Paragraph("<b>Rincian Jurnal Transaksi</b>", h2))
+        elements.append(Paragraph("<b>Rincian Jurnal Transaksi (Baris Ditandai Merah = Indikasi Selisih/Unmatched)</b>", h2))
         headers = [Paragraph(f"<b>{c}</b>", header_style) for c in df.columns]
         table_data = [headers]
-        for _, row in df.iterrows():
-            r_cells = [Paragraph(str(row[c]) if pd.notna(row[c]) else "", cell_style) for c in df.columns]
+        
+        unmatched_uraian = set()
+        if rak:
+            for _, r in pd.concat([rak.get("un_c", pd.DataFrame()), rak.get("un_p", pd.DataFrame())]).iterrows():
+                if "Uraian" in r: unmatched_uraian.add(str(r["Uraian"]).strip().lower())
+
+        bad_rows = []
+        for idx, row in df.iterrows():
+            uraian_row = str(row.get("Uraian", "")).strip().lower()
+            is_unmatched = any(u in uraian_row for u in unmatched_uraian if len(u) > 3)
+            if is_unmatched:
+                bad_rows.append(idx + 1)
+
+            r_cells = []
+            for col in df.columns:
+                val = row[col]
+                txt = rupiah(val) if isinstance(val, (int, float)) and col not in ["KD", "No. Bukti", "Kode Perkiraan"] else str(val)
+                style_to_use = cell_red_style if is_unmatched else cell_style
+                r_cells.append(Paragraph(txt, style_to_use))
             table_data.append(r_cells)
         
         col_count = len(df.columns)
@@ -280,7 +305,7 @@ def build_pdf_report(df, rak):
         col_widths = [col_width * mm] * col_count
 
         t_main = Table(table_data, colWidths=col_widths, repeatRows=1)
-        t_main.setStyle(TableStyle([
+        t_style_cmds = [
             ('BACKGROUND', (0,0), (-1,0), navy),
             ('ALIGN', (0,0), (-1,-1), 'LEFT'),
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
@@ -288,7 +313,12 @@ def build_pdf_report(df, rak):
             ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#f8fafc')]),
             ('TOPPADDING', (0,0), (-1,-1), 4),
             ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-        ]))
+        ]
+        
+        for r_idx in bad_rows:
+            t_style_cmds.append(('BACKGROUND', (0, r_idx), (-1, r_idx), colors.HexColor('#FEE2E2')))
+
+        t_main.setStyle(TableStyle(t_style_cmds))
         elements.append(t_main)
 
     doc.build(elements)
