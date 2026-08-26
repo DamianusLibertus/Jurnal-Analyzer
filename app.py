@@ -86,7 +86,7 @@ def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
         elif (('nama' in cl and 'perkiraan' in cl) or cl == 'akun') and 'Nama Perkiraan' not in assigned_targets: target = 'Nama Perkiraan'
         elif ('uraian' in cl or 'keterangan' in cl or 'u r a i a n' in cl) and 'Uraian' not in assigned_targets: target = 'Uraian'
         elif (cl.startswith('debet') or 'debet' in cl) and 'Debet' not in assigned_targets: target = 'Debet'
-        elif (cl.startswith('kredit') or 'kredit' in cl) and 'Kredit' not in assigned_targets: target = 'Kredit'
+        elif (cl.startswith('kredit' ) or 'kredit' in cl) and 'Kredit' not in assigned_targets: target = 'Kredit'
         elif 'saldo' in cl and 'Saldo' not in assigned_targets: target = 'Saldo'
         if target: col_map[c] = target; assigned_targets.add(target)
      
@@ -383,6 +383,13 @@ def build_pdf_report(df, rak, sub_res=None):
             ('BOTTOMPADDING', (0,0), (-1,-1), 4),
         ]))
         elements.append(t_sub)
+        elements.append(Spacer(1, 8))
+
+        # Penjelasan dan petunjuk audit selisih setoran
+        sub_exp = f"• <b>Analisis Selisih Setoran:</b> Terdapat selisih setoran sebesar <b>{rupiah(sub_res['selisih_setoran'])}</b> antara total rincian transaksi nasabah (Subledger) dengan total Kredit di Buku Besar (General Ledger).<br/>"
+        sub_exp += f"• <b>Analisis Sisi Penarikan:</b> Total penarikan subledger dan total Debet di Buku Besar tercatat seimbang dengan selisih <b>{rupiah(sub_res['selisih_penarikan'])}</b>.<br/>"
+        sub_exp += "• <b>Petunjuk & Rekomendasi Auditor:</b> Periksa kembali transaksi setoran yang belum ter-posting atau mengalami perbedaan nomor bukti/pencatatan akun antara rincian tabungan nasabah dan buku besar utama."
+        elements.append(Paragraph(sub_exp, body_style))
         elements.append(Spacer(1, 12))
 
     if not df.empty:
