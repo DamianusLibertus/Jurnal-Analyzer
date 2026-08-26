@@ -400,7 +400,6 @@ def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
           or b_val == "nan"
           or b_val not in gl_bukti_set
       ):
-        # Keterangan auditor dinamis dan variatif
         if "bunga" in nama_nasabah or num_val < 100000:
           ket_auditor = (
               "Akumulasi Setoran Bunga Akhir Bulan (Belum Dijurnal Terpisah di"
@@ -764,8 +763,20 @@ def main():
   up_files = st.file_uploader(
       "Upload file Excel", accept_multiple_files=True, type=["xlsx", "xls", "csv"]
   )
+
+  # Tombol reset sesi untuk membersihkan cache data lama secara manual
+  if st.button("🔄 Reset / Bersihkan Sesi Data"):
+    for key in list(st.session_state.keys()):
+      del st.session_state[key]
+    st.success("Sesi berhasil dibersihkan! Silakan upload file baru.")
+    st.rerun()
+
   if st.button("🚀 Ekstrak & Analisis", type="primary"):
     if up_files and len(up_files) >= 1:
+      # Bersihkan sesi lama terlebih dahulu agar file baru tidak tercampur cache
+      for key in list(st.session_state.keys()):
+        del st.session_state[key]
+
       all_frames = [process_uploaded_file(f) for f in up_files]
       combined = (
           pd.concat(all_frames, ignore_index=True)
