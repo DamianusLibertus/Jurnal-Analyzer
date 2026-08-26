@@ -55,7 +55,7 @@ def rupiah(v: float) -> str:
     try: return f"Rp {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception: return str(v)
 
-# ---------- UNIVERSAL CLEANING PARSER (DENGAN TANGGAL OTOMATIS) ----------
+# ---------- UNIVERSAL CLEANING PARSER ----------
 STD_COLS = ["Tanggal", "KD", "No. Bukti", "Kode Perkiraan", "Nama Perkiraan", "Uraian", "Debet", "Kredit"]
 
 def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
@@ -129,7 +129,7 @@ def process_uploaded_file(uploaded_file):
     except: pass
     return pd.DataFrame(columns=STD_COLS)
 
-# ---------- ENGINE RAK & PDF (DENGAN DETEKSI PUSAT VS CABANG AKURAT) ----------
+# ---------- ENGINE RAK & PDF ----------
 def perform_rak_reconciliation(df_all):
     if "Source_File" not in df_all.columns: return None
     files = df_all["Source_File"].unique()
@@ -138,11 +138,7 @@ def perform_rak_reconciliation(df_all):
     df_a = df_all[df_all["Source_File"] == files[0]].copy().reset_index(drop=True)
     df_b = df_all[df_all["Source_File"] == files[1]].copy().reset_index(drop=True)
     
-    # Deteksi akurat berdasarkan nama file atau isi file
     f0_lower = str(files[0]).lower()
-    f1_lower = str(files[1]).lower()
-    
-    # Jika file 0 adalah pusat (misal 770) atau file 1 adalah cabang (773)
     if "770" in f0_lower or "pusat" in f0_lower:
         df_p, df_c = df_a, df_b
     else:
@@ -150,6 +146,9 @@ def perform_rak_reconciliation(df_all):
      
     sal_c = df_c["Debet"].sum() - df_c["Kredit"].sum()
     sal_p = df_p["Debet"].sum() - df_p["Kredit"].sum()
+    
+    debet_c, kredit_c = df_c["Debet"].sum(), df_c["Kredit"].sum()
+    debet_p, kredit_p = df_p["Debet"].sum(), df_p["Kredit"].sum()
      
     matched, un_c, un_p = [], [], []
     p_used = set()
@@ -163,17 +162,30 @@ def perform_rak_reconciliation(df_all):
         if not found: un_c.append({"Uraian": row_c["Uraian"], "Nominal": rupiah(row_c["Debet"] or row_c["Kredit"]), "Status": "BELUM DI PUSAT"})
     for idx_p, row_p in df_p.iterrows():
         if idx_p not in p_used: un_p.append({"Uraian": row_p["Uraian"], "Nominal": rupiah(row_p["Debet"] or row_p["Kredit"]), "Status": "HANYA DI PUSAT"})
-    return {"sal_c": sal_c, "sal_p": sal_p, "selisih": sal_p - sal_c, "matched": pd.DataFrame(matched), "un_c": pd.DataFrame(un_c), "un_p": pd.DataFrame(un_p)}
+        
+    return {
+        "sal_c": sal_c, "sal_p": sal_p, "selisih": sal_p - sal_c,
+        "debet_c": debet_c, "kredit_c": kredit_c, "debet_p": debet_p, "kredit_p": kredit_p,
+        "matched": pd.DataFrame(matched), "un_c": pd.DataFrame(un_c), "un_p": pd.DataFrame(un_p)
+    }
 
 def parse_subledger_simpanan(file_bytes, filename):
     try:
         raw = pd.read_excel(BytesIO(file_bytes), header=None)
-        header_row = 0
+        header_row = -1
+        is_subledger_file = False
         for i, row in raw.iterrows():
             row_str = " ".join([str(v).lower() for v in row.values if pd.notna(v)])
+            if "laporan transaksi" in row_str or "tabungan" in row_str or "simpanan" in row_str:
+                is_subledger_file = True
             if "no." in row_str and "rekening" in row_str and ("setoran" in row_str or "penarikan" in row_str):
                 header_row = i
+                is_subledger_file = True
                 break
+        
+        if not is_subledger_file or header_row == -1:
+            return pd.DataFrame()
+
         df = pd.read_excel(BytesIO(file_bytes), skiprows=header_row)
         df.columns = [str(c).strip().replace('\n', ' ') for c in df.columns]
         
@@ -196,6 +208,7 @@ def parse_subledger_simpanan(file_bytes, filename):
         return pd.DataFrame()
 
 def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
+    if df_subledger.empty: return None
     tot_setoran = df_subledger['Setoran'].sum() if 'Setoran' in df_subledger.columns else 0.0
     tot_penarikan = df_subledger['Penarikan'].sum() if 'Penarikan' in df_subledger.columns else 0.0
     
@@ -339,15 +352,13 @@ def build_pdf_report(df, rak):
         un_p_df = rak.get("un_p", pd.DataFrame())
         selisih_val = rak["selisih"]
 
-        if abs(selisih_val) < 1.0 and un_c_df.empty and un_p_df.empty:
-            exp_text = "• <b>Status Rekonsiliasi: SEIMBANG.</b> Saldo antara Kantor Cabang dan Kantor Pusat sudah klop dan cocok secara matematis."
-        else:
-            exp_text = f"• <b>Total Selisih Tercatat: {rupiah(selisih_val)}.</b> Selisih ini timbul akibat adanya transaksi gantung yang belum dicatat secara timbal balik.<br/>"
-            if not un_c_df.empty:
-                exp_text += f"• <b>Transaksi Belum Dicatat di Pusat ({len(un_c_df)} transaksi):</b> Contoh uraian: <i>{un_c_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_c_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
-            if not un_p_df.empty:
-                exp_text += f"• <b>Transaksi Belum Dicatat di Cabang ({len(un_p_df)} transaksi):</b> Contoh uraian: <i>{un_p_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_p_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
-            exp_text += "• <b>Rekomendasi Auditor:</b> Lakukan konfirmasi timbal balik dan buat jurnal penyesuaian (adjustment entries) untuk mencatat transaksi tersebut."
+        exp_text = f"• <b>Perhitungan Saldo:</b> Saldo Kantor Cabang tercatat sebesar <b>{rupiah(rak['sal_c'])}</b> (Total Debet: {rupiah(rak['debet_c'])} - Total Kredit: {rupiah(rak['kredit_c'])}), sedangkan Saldo Kantor Pusat tercatat sebesar <b>{rupiah(rak['sal_p'])}</b> (Total Debet: {rupiah(rak['debet_p'])} - Total Kredit: {rupiah(rak['kredit_p'])}).<br/>"
+        exp_text += f"• <b>Total Selisih Bersih: {rupiah(selisih_val)}.</b> Selisih ini timbul akibat adanya transaksi gantung timbal balik antara pembukuan Cabang dan Pusat.<br/>"
+        if not un_c_df.empty:
+            exp_text += f"• <b>Transaksi di Cabang Belum Dicatat di Pusat ({len(un_c_df)} transaksi):</b> Contoh uraian: <i>{un_c_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_c_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
+        if not un_p_df.empty:
+            exp_text += f"• <b>Transaksi di Pusat Belum Dicatat di Cabang ({len(un_p_df)} transaksi):</b> Contoh uraian: <i>{un_p_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_p_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
+        exp_text += "• <b>Rekomendasi Auditor:</b> Lakukan konfirmasi timbal balik antar kantor dan buat jurnal penyesuaian (adjustment entries) untuk memulihkan kesesuaian laporan."
 
         elements.append(Paragraph(exp_text, body_style))
         elements.append(Spacer(1, 12))
@@ -422,6 +433,8 @@ def main():
             if subledger_frames and not combined.empty:
                 combined_sub = pd.concat(subledger_frames, ignore_index=True)
                 st.session_state.subledger_analysis = perform_subledger_vs_gl_analysis(combined_sub, combined)
+            else:
+                st.session_state.subledger_analysis = None
 
             st.success(f"Berhasil mengekstrak {len(combined)} baris data!")
             st.rerun()
