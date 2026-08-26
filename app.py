@@ -353,11 +353,12 @@ def build_pdf_report(df, rak):
         selisih_val = rak["selisih"]
 
         exp_text = f"• <b>Perhitungan Saldo:</b> Saldo Kantor Cabang tercatat sebesar <b>{rupiah(rak['sal_c'])}</b> (Total Debet: {rupiah(rak['debet_c'])} - Total Kredit: {rupiah(rak['kredit_c'])}), sedangkan Saldo Kantor Pusat tercatat sebesar <b>{rupiah(rak['sal_p'])}</b> (Total Debet: {rupiah(rak['debet_p'])} - Total Kredit: {rupiah(rak['kredit_p'])}).<br/>"
-        exp_text += f"• <b>Total Selisih Bersih: {rupiah(selisih_val)}.</b> Selisih ini timbul akibat adanya transaksi gantung timbal balik antara pembukuan Cabang dan Pusat.<br/>"
+        exp_text += f"• <b>Formula Selisih Bersih:</b> Selisih sebesar <b>{rupiah(selisih_val)}</b> dihitung dari Saldo Pusat dikurangi Saldo Cabang ({rupiah(rak['sal_p'])} - ({rupiah(rak['sal_c'])})).<br/>"
+        exp_text += "• <b>Definisi Transaksi Gantung (Outstanding):</b> Transaksi yang sudah dicatat oleh salah satu pihak (misal Cabang) namun belum dicatat/di-posting oleh pihak seberangnya (Pusat) pada periode yang sama.<br/>"
         if not un_c_df.empty:
-            exp_text += f"• <b>Transaksi di Cabang Belum Dicatat di Pusat ({len(un_c_df)} transaksi):</b> Contoh uraian: <i>{un_c_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_c_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
+            exp_text += f"• <b>Transaksi Gantung di Cabang Belum Dicatat di Pusat ({len(un_c_df)} transaksi):</b> Contoh uraian: <i>{un_c_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_c_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
         if not un_p_df.empty:
-            exp_text += f"• <b>Transaksi di Pusat Belum Dicatat di Cabang ({len(un_p_df)} transaksi):</b> Contoh uraian: <i>{un_p_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_p_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
+            exp_text += f"• <b>Transaksi Gantung di Pusat Belum Dicatat di Cabang ({len(un_p_df)} transaksi):</b> Contoh uraian: <i>{un_p_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_p_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
         exp_text += "• <b>Rekomendasi Auditor:</b> Lakukan konfirmasi timbal balik antar kantor dan buat jurnal penyesuaian (adjustment entries) untuk memulihkan kesesuaian laporan."
 
         elements.append(Paragraph(exp_text, body_style))
