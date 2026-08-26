@@ -12,7 +12,6 @@ import re
 
 import numpy as np
 import pandas as pd
-import streamlit as str_lit  # menggunakan alias aman untuk streamlit
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -393,22 +392,37 @@ def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
     for idx, row in df_subledger.iterrows():
       b_val = str(row.get("No_Bukti", "")).strip()
       num_val = row.get("Setoran", 0.0) or row.get("Penarikan", 0.0)
+      nama_nasabah = str(row.get("Nama_Nasabah", "")).lower()
+
       if num_val > 0 and (
           pd.isna(row.get("No_Bukti"))
           or b_val == ""
           or b_val == "nan"
           or b_val not in gl_bukti_set
       ):
+        # Keterangan auditor dinamis dan variatif
+        if "bunga" in nama_nasabah or num_val < 100000:
+          ket_auditor = (
+              "Akumulasi Setoran Bunga Akhir Bulan (Belum Dijurnal Terpisah di"
+              " GL)"
+          )
+        elif b_val == "TANPA NO BUKTI" or b_val == "nan" or b_val == "":
+          ket_auditor = (
+              "Transaksi Tanpa Nomor Bukti Pendukung di Buku Besar Utama"
+          )
+        else:
+          ket_auditor = (
+              "Nomor Bukti Subledger Tidak Ditemukan pada Jurnal Buku Besar"
+          )
+
         unmatched_subledger.append({
             "Letak Baris": idx + 1,
             "Tgl Trans": row.get("Tgl_Trans", "-"),
             "No Rekening": row.get("No_Rekening", "-"),
             "Nama Nasabah": row.get("Nama_Nasabah", "-"),
-            "No Bukti": b_val if b_val != "nan" else "TANPA NO BUKTI",
+            "No Bukti": b_val if b_val != "nan" and b_val != "" else "TANPA NO BUKTI",
             "Nominal Transaksi": rupiah(num_val),
-            "Keterangan Auditor": (
-                "Transaksi Subledger Tidak Ditemukan / Berbeda di Buku Besar"
-            ),
+            "Keterangan Auditor": ket_auditor,
         })
 
   return {
@@ -634,7 +648,6 @@ def build_pdf_report(df, rak, sub_res=None):
     elements.append(t_sub)
     elements.append(Spacer(1, 8))
 
-    # Penjelasan dan petunjuk audit selisih setoran yang sudah mencakup rincian nomor bukti
     sub_exp = (
         f"• <b>Analisis Selisih Setoran:</b> Terdapat selisih setoran sebesar"
         f" <b>{rupiah(sub_res['selisih_setoran'])}</b> antara total rincian"
