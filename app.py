@@ -129,8 +129,24 @@ def process_uploaded_file(uploaded_file):
     except: pass
     return pd.DataFrame(columns=STD_COLS)
 
-# ---------- ENGINE RAK & PDF ----------
-def perform_rak_reconciliation(df_all):
+# ---------- ENGINE RAK & PDF (SALDO AKHIR RIIL) ----------
+def get_file_ending_balance(file_bytes):
+    try:
+        raw = pd.read_excel(BytesIO(file_bytes), header=None)
+        for _, row in raw.iterrows():
+            for val in row.values:
+                if pd.notna(val):
+                    s = str(val).strip()
+                    # Cek nilai saldo di baris terakhir atau kolom saldo
+                    num = to_num(s)
+                    if num > 1000000: # Asumsi saldo buku besar koperasi di atas 1 juta
+                        last_valid_saldo = num
+        # Atau ambil dari baris terakhir kolom saldo terdeteksi
+        return last_valid_saldo if 'last_valid_saldo' in locals() else 0.0
+    except:
+        return 0.0
+
+def perform_rak_reconciliation(df_all, raw_files_dict=None):
     if "Source_File" not in df_all.columns: return None
     files = df_all["Source_File"].unique()
     if len(files) < 2: return None
@@ -144,8 +160,9 @@ def perform_rak_reconciliation(df_all):
     else:
         df_c, df_p = df_a, df_b
      
-    sal_c = df_c["Debet"].sum() - df_c["Kredit"].sum()
-    sal_p = df_p["Debet"].sum() - df_p["Kredit"].sum()
+    # Mengambil Saldo Akhir riil dari kolom saldo baris terakhir masing-masing dataframe jika tersedia
+    sal_c = df_c["Saldo"].iloc[-1] if "Saldo" in df_c.columns and (df_c["Saldo"] != 0).any() else (df_c["Debet"].sum() - df_c["Kredit"].sum())
+    sal_p = df_p["Saldo"].iloc[-1] if "Saldo" in df_p.columns and (df_p["Saldo"] != 0).any() else (df_p["Debet"].sum() - df_p["Kredit"].sum())
     
     debet_c, kredit_c = df_c["Debet"].sum(), df_c["Kredit"].sum()
     debet_p, kredit_p = df_p["Debet"].sum(), df_p["Kredit"].sum()
@@ -164,7 +181,7 @@ def perform_rak_reconciliation(df_all):
         if idx_p not in p_used: un_p.append({"Uraian": row_p["Uraian"], "Nominal": rupiah(row_p["Debet"] or row_p["Kredit"]), "Status": "HANYA DI PUSAT"})
         
     return {
-        "sal_c": sal_c, "sal_p": sal_p, "selisih": sal_p - sal_c,
+        "sal_c": sal_c, "sal_p": sal_p, "selisih": abs(sal_p - sal_c),
         "debet_c": debet_c, "kredit_c": kredit_c, "debet_p": debet_p, "kredit_p": kredit_p,
         "matched": pd.DataFrame(matched), "un_c": pd.DataFrame(un_c), "un_p": pd.DataFrame(un_p)
     }
@@ -331,9 +348,9 @@ def build_pdf_report(df, rak):
     if rak:
         summary_data = [
             [Paragraph("<b>Keterangan</b>", header_style), Paragraph("<b>Nilai</b>", header_style)],
-            [Paragraph("Saldo Cabang", cell_style), Paragraph(rupiah(rak["sal_c"]), cell_style)],
-            [Paragraph("Saldo Pusat", cell_style), Paragraph(rupiah(rak["sal_p"]), cell_style)],
-            [Paragraph("Selisih", cell_style), Paragraph(rupiah(rak["selisih"]), cell_style)]
+            [Paragraph("Saldo Akhir Cabang", cell_style), Paragraph(rupiah(rak["sal_c"]), cell_style)],
+            [Paragraph("Saldo Akhir Pusat", cell_style), Paragraph(rupiah(rak["sal_p"]), cell_style)],
+            [Paragraph("Selisih Pembukuan", cell_style), Paragraph(rupiah(rak["selisih"]), cell_style)]
         ]
         t_sum = Table(summary_data, colWidths=[140*mm, 126*mm])
         t_sum.setStyle(TableStyle([
@@ -352,8 +369,8 @@ def build_pdf_report(df, rak):
         un_p_df = rak.get("un_p", pd.DataFrame())
         selisih_val = rak["selisih"]
 
-        exp_text = f"• <b>Perhitungan Saldo:</b> Saldo Kantor Cabang tercatat sebesar <b>{rupiah(rak['sal_c'])}</b> (Total Debet: {rupiah(rak['debet_c'])} - Total Kredit: {rupiah(rak['kredit_c'])}), sedangkan Saldo Kantor Pusat tercatat sebesar <b>{rupiah(rak['sal_p'])}</b> (Total Debet: {rupiah(rak['debet_p'])} - Total Kredit: {rupiah(rak['kredit_p'])}).<br/>"
-        exp_text += f"• <b>Formula Selisih Bersih:</b> Selisih sebesar <b>{rupiah(selisih_val)}</b> dihitung dari Saldo Pusat dikurangi Saldo Cabang ({rupiah(rak['sal_p'])} - ({rupiah(rak['sal_c'])})).<br/>"
+        exp_text = f"• <b>Saldo Akhir Buku Besar:</b> Saldo Akhir Kantor Cabang tercatat sebesar <b>{rupiah(rak['sal_c'])}</b>, sedangkan Saldo Akhir Kantor Pusat tercatat sebesar <b>{rupiah(rak['sal_p'])}</b>.<br/>"
+        exp_text += f"• <b>Selisih Pembukuan:</b> Selisih sebesar <b>{rupiah(selisih_val)}</b> merupakan selisih saldo akhir riil antara pembukuan Pusat dan Cabang.<br/>"
         exp_text += "• <b>Definisi Transaksi Gantung (Outstanding):</b> Transaksi yang sudah dicatat oleh salah satu pihak (misal Cabang) namun belum dicatat/di-posting oleh pihak seberangnya (Pusat) pada periode yang sama.<br/>"
         if not un_c_df.empty:
             exp_text += f"• <b>Transaksi Gantung di Cabang Belum Dicatat di Pusat ({len(un_c_df)} transaksi):</b> Contoh uraian: <i>{un_c_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_c_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
@@ -445,9 +462,9 @@ def main():
             rak = st.session_state.rak
             st.subheader("① Hasil Rekonsiliasi Antar Kantor (RAK)")
             c1, c2, c3 = st.columns(3)
-            c1.metric("Saldo Cabang", rupiah(rak["sal_c"]))
-            c2.metric("Saldo Pusat", rupiah(rak["sal_p"]))
-            c3.metric("Selisih", rupiah(rak["selisih"]))
+            c1.metric("Saldo Akhir Cabang", rupiah(rak["sal_c"]))
+            c2.metric("Saldo Akhir Pusat", rupiah(rak["sal_p"]))
+            c3.metric("Selisih Pembukuan", rupiah(rak["selisih"]))
             t1, t2 = st.tabs(["🔴 Selisih & Unmatched", "✅ Matched"])
             with t1: st.dataframe(pd.concat([rak["un_c"], rak["un_p"]]), use_container_width=True)
             with t2: st.dataframe(rak["matched"], use_container_width=True)
