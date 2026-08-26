@@ -55,8 +55,8 @@ def rupiah(v: float) -> str:
     try: return f"Rp {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception: return str(v)
 
-# ---------- UNIVERSAL CLEANING PARSER ----------
-STD_COLS = ["KD", "No. Bukti", "Kode Perkiraan", "Nama Perkiraan", "Uraian", "Debet", "Kredit"]
+# ---------- UNIVERSAL CLEANING PARSER (DENGAN TANGGAL OTOMATIS) ----------
+STD_COLS = ["Tanggal", "KD", "No. Bukti", "Kode Perkiraan", "Nama Perkiraan", "Uraian", "Debet", "Kredit"]
 
 def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
     if df_raw is None or df_raw.empty: return pd.DataFrame(columns=STD_COLS), "unknown", 0.0
@@ -79,7 +79,8 @@ def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
     for c in df.columns:
         cl = c.strip().lower().replace("\n", " ")
         target = None
-        if cl in ['kd', 'jenis', 'tipe', 'jurnal'] and 'KD' not in assigned_targets: target = 'KD'
+        if ('tgl' in cl or 'tanggal' in cl) and 'Tanggal' not in assigned_targets: target = 'Tanggal'
+        elif cl in ['kd', 'jenis', 'tipe', 'jurnal'] and 'KD' not in assigned_targets: target = 'KD'
         elif ('bukti' in cl or 'ref' in cl) and 'No. Bukti' not in assigned_targets: target = 'No. Bukti'
         elif ('kode' in cl and 'perkiraan' in cl) or cl == 'kode' and 'Kode Perkiraan' not in assigned_targets: target = 'Kode Perkiraan'
         elif (('nama' in cl and 'perkiraan' in cl) or cl == 'akun') and 'Nama Perkiraan' not in assigned_targets: target = 'Nama Perkiraan'
@@ -155,7 +156,6 @@ def perform_rak_reconciliation(df_all):
         if idx_p not in p_used: un_p.append({"Uraian": row_p["Uraian"], "Nominal": rupiah(row_p["Debet"] or row_p["Kredit"]), "Status": "HANYA DI PUSAT"})
     return {"sal_c": sal_c, "sal_p": sal_p, "selisih": sal_p - sal_c, "matched": pd.DataFrame(matched), "un_c": pd.DataFrame(un_c), "un_p": pd.DataFrame(un_p)}
 
-# ---------- MODUL TAMBAHAN AMAN (SUBLEDGER SIMPANAN VS GL) ----------
 def parse_subledger_simpanan(file_bytes, filename):
     try:
         raw = pd.read_excel(BytesIO(file_bytes), header=None)
