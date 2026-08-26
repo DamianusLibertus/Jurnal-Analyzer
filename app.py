@@ -129,24 +129,8 @@ def process_uploaded_file(uploaded_file):
     except: pass
     return pd.DataFrame(columns=STD_COLS)
 
-# ---------- ENGINE RAK & PDF (SALDO AKHIR RIIL) ----------
-def get_file_ending_balance(file_bytes):
-    try:
-        raw = pd.read_excel(BytesIO(file_bytes), header=None)
-        for _, row in raw.iterrows():
-            for val in row.values:
-                if pd.notna(val):
-                    s = str(val).strip()
-                    # Cek nilai saldo di baris terakhir atau kolom saldo
-                    num = to_num(s)
-                    if num > 1000000: # Asumsi saldo buku besar koperasi di atas 1 juta
-                        last_valid_saldo = num
-        # Atau ambil dari baris terakhir kolom saldo terdeteksi
-        return last_valid_saldo if 'last_valid_saldo' in locals() else 0.0
-    except:
-        return 0.0
-
-def perform_rak_reconciliation(df_all, raw_files_dict=None):
+# ---------- ENGINE RAK & PDF ----------
+def perform_rak_reconciliation(df_all):
     if "Source_File" not in df_all.columns: return None
     files = df_all["Source_File"].unique()
     if len(files) < 2: return None
@@ -160,7 +144,6 @@ def perform_rak_reconciliation(df_all, raw_files_dict=None):
     else:
         df_c, df_p = df_a, df_b
      
-    # Mengambil Saldo Akhir riil dari kolom saldo baris terakhir masing-masing dataframe jika tersedia
     sal_c = df_c["Saldo"].iloc[-1] if "Saldo" in df_c.columns and (df_c["Saldo"] != 0).any() else (df_c["Debet"].sum() - df_c["Kredit"].sum())
     sal_p = df_p["Saldo"].iloc[-1] if "Saldo" in df_p.columns and (df_p["Saldo"] != 0).any() else (df_p["Debet"].sum() - df_p["Kredit"].sum())
     
@@ -262,7 +245,7 @@ def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
         "df_unmatched_subledger": pd.DataFrame(unmatched_subledger)
     }
 
-def build_pdf_report(df, rak):
+def build_pdf_report(df, rak, sub_res=None):
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib import colors
     from reportlab.lib.units import mm
@@ -379,6 +362,27 @@ def build_pdf_report(df, rak):
         exp_text += "• <b>Rekomendasi Auditor:</b> Lakukan konfirmasi timbal balik antar kantor dan buat jurnal penyesuaian (adjustment entries) untuk memulihkan kesesuaian laporan."
 
         elements.append(Paragraph(exp_text, body_style))
+        elements.append(Spacer(1, 12))
+
+    if sub_res:
+        elements.append(Paragraph("<b>Hasil Uji Kesesuaian Subledger Simpanan vs Buku Besar</b>", h2))
+        sub_summary = [
+            [Paragraph("<b>Parameter Uji Kesesuaian</b>", header_style), Paragraph("<b>Nilai / Selisih</b>", header_style)],
+            [Paragraph("Total Setoran (Subledger Nasabah)", cell_style), Paragraph(rupiah(sub_res["tot_setoran"]), cell_style)],
+            [Paragraph("Total Kredit di Buku Besar (GL)", cell_style), Paragraph(rupiah(sub_res["tot_kredit_gl"]), cell_style)],
+            [Paragraph("Selisih Setoran", cell_style), Paragraph(rupiah(sub_res["selisih_setoran"]), cell_style)],
+            [Paragraph("Selisih Penarikan", cell_style), Paragraph(rupiah(sub_res["selisih_penarikan"]), cell_style)],
+        ]
+        t_sub = Table(sub_summary, colWidths=[140*mm, 126*mm])
+        t_sub.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), navy),
+            ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
+            ('TOPPADDING', (0,0), (-1,-1), 4),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ]))
+        elements.append(t_sub)
         elements.append(Spacer(1, 12))
 
     if not df.empty:
@@ -522,7 +526,7 @@ def main():
 
         e1.download_button(
             "🖨️ Cetak PDF", 
-            build_pdf_report(df_to_export, st.session_state.get("rak")), 
+            build_pdf_report(df_to_export, st.session_state.get("rak"), st.session_state.get("subledger_analysis")), 
             f"Laporan_Analisis_RAK_{datetime.now():%Y%m%d_%H%M}.pdf", 
             "application/pdf", 
             use_container_width=True
