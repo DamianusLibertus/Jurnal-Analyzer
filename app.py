@@ -129,15 +129,24 @@ def process_uploaded_file(uploaded_file):
     except: pass
     return pd.DataFrame(columns=STD_COLS)
 
-# ---------- ENGINE RAK & PDF ----------
+# ---------- ENGINE RAK & PDF (DENGAN DETEKSI PUSAT VS CABANG AKURAT) ----------
 def perform_rak_reconciliation(df_all):
     if "Source_File" not in df_all.columns: return None
     files = df_all["Source_File"].unique()
     if len(files) < 2: return None
+    
     df_a = df_all[df_all["Source_File"] == files[0]].copy().reset_index(drop=True)
     df_b = df_all[df_all["Source_File"] == files[1]].copy().reset_index(drop=True)
-    if "pusat" in str(files[1]).lower(): df_c, df_p = df_a, df_b
-    else: df_c, df_p = df_b, df_a
+    
+    # Deteksi akurat berdasarkan nama file atau isi file
+    f0_lower = str(files[0]).lower()
+    f1_lower = str(files[1]).lower()
+    
+    # Jika file 0 adalah pusat (misal 770) atau file 1 adalah cabang (773)
+    if "770" in f0_lower or "pusat" in f0_lower:
+        df_p, df_c = df_a, df_b
+    else:
+        df_c, df_p = df_a, df_b
      
     sal_c = df_c["Debet"].sum() - df_c["Kredit"].sum()
     sal_p = df_p["Debet"].sum() - df_p["Kredit"].sum()
