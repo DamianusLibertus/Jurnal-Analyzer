@@ -55,7 +55,7 @@ def rupiah(v: float) -> str:
     try: return f"Rp {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception: return str(v)
 
-# ---------- UNIVERSAL CLEANING PARSER (ASLI) ----------
+# ---------- UNIVERSAL CLEANING PARSER ----------
 STD_COLS = ["KD", "No. Bukti", "Kode Perkiraan", "Nama Perkiraan", "Uraian", "Debet", "Kredit"]
 
 def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
@@ -128,7 +128,7 @@ def process_uploaded_file(uploaded_file):
     except: pass
     return pd.DataFrame(columns=STD_COLS)
 
-# ---------- ENGINE RAK (ASLI) ----------
+# ---------- ENGINE RAK & PDF ----------
 def perform_rak_reconciliation(df_all):
     if "Source_File" not in df_all.columns: return None
     files = df_all["Source_File"].unique()
@@ -155,7 +155,7 @@ def perform_rak_reconciliation(df_all):
         if idx_p not in p_used: un_p.append({"Uraian": row_p["Uraian"], "Nominal": rupiah(row_p["Debet"] or row_p["Kredit"]), "Status": "HANYA DI PUSAT"})
     return {"sal_c": sal_c, "sal_p": sal_p, "selisih": sal_p - sal_c, "matched": pd.DataFrame(matched), "un_c": pd.DataFrame(un_c), "un_p": pd.DataFrame(un_p)}
 
-# ---------- PENAMBAHAN: ENGINE REKONSILIASI SUBLEDGER SIMPANAN VS BUKU BESAR ----------
+# ---------- MODUL TAMBAHAN AMAN (SUBLEDGER SIMPANAN VS GL) ----------
 def parse_subledger_simpanan(file_bytes, filename):
     try:
         raw = pd.read_excel(BytesIO(file_bytes), header=None)
@@ -196,7 +196,6 @@ def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
     selisih_setoran = tot_setoran - tot_kredit_gl
     selisih_penarikan = tot_penarikan - tot_debet_gl
     
-    # Deteksi Letak Ketidaksesuaian (Baris tanpa No Bukti atau Unmatched)
     unmatched_subledger = []
     if 'No_Bukti' in df_subledger.columns and 'No. Bukti' in df_gl.columns:
         gl_bukti_set = set(df_gl['No. Bukti'].dropna().astype(str).str.strip().unique())
@@ -224,7 +223,6 @@ def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
         "df_unmatched_subledger": pd.DataFrame(unmatched_subledger)
     }
 
-# ---------- PDF REPORT BUILDER (ASLI) ----------
 def build_pdf_report(df, rak):
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib import colors
@@ -245,12 +243,63 @@ def build_pdf_report(df, rak):
     styles = getSampleStyleSheet()
     navy = colors.HexColor('#1E3A5F')
     
-    title_style = ParagraphStyle('ReportTitle', parent=styles['Title'], fontName='Helvetica-Bold', fontSize=15, leading=18, textColor=navy, alignment=0, spaceAfter=12)
-    h2 = ParagraphStyle('Heading2Style', parent=styles['Heading2'], textColor=navy, fontSize=11, leading=15, spaceBefore=10, spaceAfter=6, fontName='Helvetica-Bold')
-    cell_style = ParagraphStyle('Cell', parent=styles['Normal'], fontName='Helvetica', fontSize=8, leading=11, textColor=colors.HexColor('#374151'))
-    cell_red_style = ParagraphStyle('CellRed', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8, leading=11, textColor=colors.HexColor('#DC2626'))
-    header_style = ParagraphStyle('HeaderCell', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8, leading=11, textColor=colors.white)
-    body_style = ParagraphStyle('BodyStyle', parent=styles['Normal'], fontSize=8.5, leading=12, textColor=colors.HexColor('#1E293B'), fontName='Helvetica')
+    title_style = ParagraphStyle(
+        'ReportTitle',
+        parent=styles['Title'],
+        fontName='Helvetica-Bold',
+        fontSize=15,
+        leading=18,
+        textColor=navy,
+        alignment=0,
+        spaceAfter=12
+    )
+    
+    h2 = ParagraphStyle(
+        'Heading2Style',
+        parent=styles['Heading2'],
+        textColor=navy,
+        fontSize=11,
+        leading=15,
+        spaceBefore=10,
+        spaceAfter=6,
+        fontName='Helvetica-Bold'
+    )
+    
+    cell_style = ParagraphStyle(
+        'Cell',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=8,
+        leading=11,
+        textColor=colors.HexColor('#374151')
+    )
+
+    cell_red_style = ParagraphStyle(
+        'CellRed',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=8,
+        leading=11,
+        textColor=colors.HexColor('#DC2626')
+    )
+    
+    header_style = ParagraphStyle(
+        'HeaderCell',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=8,
+        leading=11,
+        textColor=colors.white
+    )
+
+    body_style = ParagraphStyle(
+        'BodyStyle',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=12,
+        textColor=colors.HexColor('#1E293B'),
+        fontName='Helvetica'
+    )
 
     elements.append(Paragraph(f"<b>{APP_TITLE}</b>", title_style))
     elements.append(Paragraph(f"Hak Cipta © {CURRENT_YEAR} {OWNER}. Seluruh Hak Cipta Dilindungi.", ParagraphStyle('Sub', parent=styles['Normal'], fontSize=8, textColor=colors.grey)))
@@ -346,36 +395,32 @@ def build_pdf_report(df, rak):
 # ---------- ANTARMUKA UTAMA ----------
 def main():
     st.markdown(f"# 📊 {APP_TITLE}")
-    up_files = st.file_uploader("Upload file Excel (Buku Besar / RAK / Laporan Simpanan)", accept_multiple_files=True, type=["xlsx", "xls", "csv"])
-    
+    up_files = st.file_uploader("Upload file Excel", accept_multiple_files=True, type=["xlsx", "xls", "csv"])
     if st.button("🚀 Ekstrak & Analisis", type="primary"):
         if up_files and len(up_files) >= 1:
             all_frames = [process_uploaded_file(f) for f in up_files]
             combined = pd.concat(all_frames, ignore_index=True) if all_frames else pd.DataFrame(columns=STD_COLS)
             
-            # Cek jika ada file Subledger Simpanan yang diupload
             subledger_frames = []
             for f in up_files:
                 df_sub = parse_subledger_simpanan(f.getvalue(), f.name)
-                if not df_sub.empty:
-                    subledger_frames.append(df_sub)
-            
+                if not df_sub.empty: subledger_frames.append(df_sub)
+
             if not combined.empty:
                 st.session_state.df = combined
                 st.session_state.rak = perform_rak_reconciliation(combined)
-                
+            
             if subledger_frames and not combined.empty:
-                combined_subledger = pd.concat(subledger_frames, ignore_index=True)
-                st.session_state.subledger_analysis = perform_subledger_vs_gl_analysis(combined_subledger, combined)
-                
-            st.success(f"Berhasil mengekstrak data dari {len(up_files)} file!")
+                combined_sub = pd.concat(subledger_frames, ignore_index=True)
+                st.session_state.subledger_analysis = perform_subledger_vs_gl_analysis(combined_sub, combined)
+
+            st.success(f"Berhasil mengekstrak {len(combined)} baris data!")
             st.rerun()
 
-    # Tampilan Hasil Rekonsiliasi RAK (Asli)
     if "df" in st.session_state and st.session_state.df is not None and not st.session_state.df.empty:
         if st.session_state.get("rak"):
-            st.subheader("① Hasil Rekonsiliasi Antar Kantor (RAK)")
             rak = st.session_state.rak
+            st.subheader("① Hasil Rekonsiliasi Antar Kantor (RAK)")
             c1, c2, c3 = st.columns(3)
             c1.metric("Saldo Cabang", rupiah(rak["sal_c"]))
             c2.metric("Saldo Pusat", rupiah(rak["sal_p"]))
@@ -384,24 +429,20 @@ def main():
             with t1: st.dataframe(pd.concat([rak["un_c"], rak["un_p"]]), use_container_width=True)
             with t2: st.dataframe(rak["matched"], use_container_width=True)
 
-        # PENAMBAHAN TAMPILAN: Hasil Rekonsiliasi Subledger Simpanan vs Buku Besar (Satu Sistem)
         if st.session_state.get("subledger_analysis"):
             st.markdown("---")
-            st.subheader("🔍 Hasil Uji Kesesuaian Subledger Simpanan vs Buku Besar (Internal)")
+            st.subheader("🔍 Hasil Uji Kesesuaian Subledger Simpanan vs Buku Besar")
             sub_res = st.session_state.subledger_analysis
-            
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Total Setoran (Subledger)", rupiah(sub_res["tot_setoran"]))
-            m2.metric("Total Kredit (Buku Besar)", rupiah(sub_res["tot_kredit_gl"]))
+            m1.metric("Total Setoran", rupiah(sub_res["tot_setoran"]))
+            m2.metric("Total Kredit (GL)", rupiah(sub_res["tot_kredit_gl"]))
             m3.metric("Selisih Setoran", rupiah(sub_res["selisih_setoran"]), delta_color="inverse")
             m4.metric("Selisih Penarikan", rupiah(sub_res["selisih_penarikan"]), delta_color="inverse")
             
-            st.warning("📍 **Audit Trail / Letak Ketidaksesuaian Transaksi (Penyebab Selisih):**")
+            st.warning("📍 **Audit Trail / Letak Ketidaksesuaian Transaksi:**")
             df_un = sub_res["df_unmatched_subledger"]
-            if not df_un.empty:
-                st.dataframe(df_un, use_container_width=True)
-            else:
-                st.success("Semua transaksi di Subledger cocok dan ter-posting sempurna ke Buku Besar.")
+            if not df_un.empty: st.dataframe(df_un, use_container_width=True)
+            else: st.success("Semua transaksi di Subledger cocok dan ter-posting sempurna ke Buku Besar.")
 
         st.subheader("② Pratinjau & Edit Data Jurnal")
         
