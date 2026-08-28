@@ -4,16 +4,27 @@
 # Application: Aplikasi Analisis Jurnal & Rekonsiliasi
 # =========================================================
 
-from datetime import datetime
-from io import BytesIO
 import io
 import os
 import re
+from datetime import datetime
+from io import BytesIO
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
+
+# [PERBAIKAN] Pemindahan import ReportLab ke global level
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
 
 load_dotenv()
 
@@ -89,6 +100,8 @@ def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
         return pd.DataFrame(columns=STD_COLS), "unknown", 0.0
     df = df_raw.copy().dropna(how="all")
     saldo_awal_val = 0.0
+    
+    # [PERBAIKAN] Heuristic header finder
     for idx, row in df.head(15).iterrows():
         row_str = " ".join([str(val) for val in row.values if pd.notna(val)]).lower()
         if "saldo awal" in row_str:
@@ -125,6 +138,7 @@ def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
             target = "Kredit"
         elif "saldo" in cl and "Saldo" not in assigned_targets:
             target = "Saldo"
+        
         if target:
             col_map[c] = target
             assigned_targets.add(target)
@@ -162,15 +176,21 @@ def process_uploaded_file(uploaded_file):
     fname = uploaded_file.name
     file_bytes = uploaded_file.getvalue()
     try:
-        xls = pd.ExcelFile(BytesIO(file_bytes))
-        frames = []
-        for sh in xls.sheet_names:
-            df_sh = pd.read_excel(BytesIO(file_bytes), sheet_name=sh)
+        # [PERBAIKAN] Deteksi CSV atau Excel
+        if fname.lower().endswith('.csv'):
+            df_sh = pd.read_csv(BytesIO(file_bytes), sep=None, engine='python')
             cleaned_df, _, _ = universal_clean_and_parse(df_sh, fname)
-            if not cleaned_df.empty:
-                frames.append(cleaned_df)
-        if frames:
-            return pd.concat(frames, ignore_index=True)
+            return cleaned_df
+        else:
+            xls = pd.ExcelFile(BytesIO(file_bytes))
+            frames = []
+            for sh in xls.sheet_names:
+                df_sh = pd.read_excel(BytesIO(file_bytes), sheet_name=sh)
+                cleaned_df, _, _ = universal_clean_and_parse(df_sh, fname)
+                if not cleaned_df.empty:
+                    frames.append(cleaned_df)
+            if frames:
+                return pd.concat(frames, ignore_index=True)
     except Exception as e:
         st.error(f"Gagal membaca file {fname}: {e}")
     return pd.DataFrame(columns=STD_COLS)
@@ -241,51 +261,75 @@ def perform_rak_reconciliation(df_all):
         "un_p": pd.DataFrame(un_p),
     }
 
-def parse_subledger_simpanan(file_bytes, filename):
-    try:
-        raw = pd.read_excel(BytesIO(file_bytes), header=None)
-        header_row = -1
-        is_subledger_file = False
-        for i, row in raw.iterrows():
-            row_str = " ".join([str(v).lower() for v in row.values if pd.notna(v)])
-            if "laporan transaksi" in row_str or "tabungan" in row_str or "simpanan" in row_str:
-                is_subledger_file = True
-            if "no." in row_str and "rekening" in row_str and ("setoran" in row_str or "penarikan" in row_str):
-                header_row = i
-                is_subledger_file = True
-                break
+# [PERBAIKAN] Helper private untuk mengekstrak subledger (Multi-sheet support)
+def _extract_subledger_from_df(raw, file_bytes, is_csv=False, sheet_name=None):
+    header_row = -1
+    is_subledger_file = False
+    for i, row in raw.iterrows():
+        row_str = " ".join([str(v).lower() for v in row.values if pd.notna(v)])
+        if "laporan transaksi" in row_str or "tabungan" in row_str or "simpanan" in row_str:
+            is_subledger_file = True
+        if "no." in row_str and "rekening" in row_str and ("setoran" in row_str or "penarikan" in row_str):
+            header_row = i
+            is_subledger_file = True
+            break
 
-        if not is_subledger_file or header_row == -1:
-            return pd.DataFrame()
-
-        df = pd.read_excel(BytesIO(file_bytes), skiprows=header_row)
-        df.columns = [str(c).strip().replace("\n", " ") for c in df.columns]
-
-        col_map = {}
-        for c in df.columns:
-            cl = c.lower()
-            if "rekening" in cl:
-                col_map[c] = "No_Rekening"
-            elif "nasabah" in cl or "nama" in cl:
-                col_map[c] = "Nama_Nasabah"
-            elif "tgl" in cl or "tanggal" in cl:
-                col_map[c] = "Tgl_Trans"
-            elif "bukti" in cl:
-                col_map[c] = "No_Bukti"
-            elif "setoran" in cl:
-                col_map[c] = "Setoran"
-            elif "penarikan" in cl:
-                col_map[c] = "Penarikan"
-
-        df = df.rename(columns=col_map)
-        if "Setoran" in df.columns:
-            df["Setoran"] = df["Setoran"].apply(to_num)
-        if "Penarikan" in df.columns:
-            df["Penarikan"] = df["Penarikan"].apply(to_num)
-        df["Source_File"] = filename
-        return df
-    except Exception:
+    if not is_subledger_file or header_row == -1:
         return pd.DataFrame()
+
+    if is_csv:
+        df = pd.read_csv(BytesIO(file_bytes), skiprows=header_row, sep=None, engine='python')
+    else:
+        df = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name, skiprows=header_row)
+
+    df.columns = [str(c).strip().replace("\n", " ") for c in df.columns]
+    col_map = {}
+    for c in df.columns:
+        cl = c.lower()
+        if "rekening" in cl:
+            col_map[c] = "No_Rekening"
+        elif "nasabah" in cl or "nama" in cl:
+            col_map[c] = "Nama_Nasabah"
+        elif "tgl" in cl or "tanggal" in cl:
+            col_map[c] = "Tgl_Trans"
+        elif "bukti" in cl:
+            col_map[c] = "No_Bukti"
+        elif "setoran" in cl:
+            col_map[c] = "Setoran"
+        elif "penarikan" in cl:
+            col_map[c] = "Penarikan"
+
+    df = df.rename(columns=col_map)
+    if "Setoran" in df.columns:
+        df["Setoran"] = df["Setoran"].apply(to_num)
+    if "Penarikan" in df.columns:
+        df["Penarikan"] = df["Penarikan"].apply(to_num)
+    return df
+
+def parse_subledger_simpanan(file_bytes, filename):
+    frames = []
+    try:
+        # [PERBAIKAN] Penanganan CSV dan iterasi Multi-sheet Excel
+        if filename.lower().endswith('.csv'):
+            raw = pd.read_csv(BytesIO(file_bytes), header=None, sep=None, engine='python')
+            df = _extract_subledger_from_df(raw, file_bytes, is_csv=True)
+            if not df.empty:
+                df["Source_File"] = filename
+                frames.append(df)
+        else:
+            xls = pd.ExcelFile(BytesIO(file_bytes))
+            for sh in xls.sheet_names:
+                raw = pd.read_excel(BytesIO(file_bytes), sheet_name=sh, header=None)
+                df = _extract_subledger_from_df(raw, file_bytes, is_csv=False, sheet_name=sh)
+                if not df.empty:
+                    df["Source_File"] = filename
+                    frames.append(df)
+        
+        if frames:
+            return pd.concat(frames, ignore_index=True)
+    except Exception as e:
+        pass
+    return pd.DataFrame()
 
 def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
     if df_subledger.empty:
@@ -301,12 +345,15 @@ def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
 
     unmatched_subledger = []
     if "No_Bukti" in df_subledger.columns and "No. Bukti" in df_gl.columns:
-        gl_bukti_set = set(df_gl["No. Bukti"].dropna().astype(str).str.strip().unique())
+        # [PERBAIKAN] Case-insensitive mapping untuk No Bukti (dibuat jadi huruf kecil semua)
+        gl_bukti_set = set(df_gl["No. Bukti"].dropna().astype(str).str.strip().str.lower().unique())
+        
         for idx, row in df_subledger.iterrows():
             b_val = str(row.get("No_Bukti", "")).strip()
+            b_val_lower = b_val.lower()
             num_val = row.get("Setoran", 0.0) or row.get("Penarikan", 0.0)
 
-            if num_val > 0 and b_val != "" and b_val != "nan" and b_val not in gl_bukti_set:
+            if num_val > 0 and b_val_lower not in ["", "nan"] and b_val_lower not in gl_bukti_set:
                 unmatched_subledger.append({
                     "Letak Baris": idx + 1,
                     "Tgl Trans": row.get("Tgl_Trans", "-"),
@@ -328,12 +375,9 @@ def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
     }
 
 def build_pdf_report(df, rak, sub_res=None):
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4, landscape
-    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-    from reportlab.lib.units import mm
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-
+    if not REPORTLAB_AVAILABLE:
+        return b"Error: Modul reportlab tidak terinstall."
+        
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf,
@@ -548,7 +592,7 @@ def main():
         st.session_state.audit_logs = []
 
     up_files = st.file_uploader(
-        "Upload file Excel", accept_multiple_files=True, type=["xlsx", "xls", "csv"]
+        "Upload file Excel atau CSV", accept_multiple_files=True, type=["xlsx", "xls", "csv"]
     )
 
     c_btn1, c_btn2 = st.columns([1, 4])
@@ -561,6 +605,11 @@ def main():
 
     if st.button("🚀 Ekstrak & Analisis", type="primary"):
         if up_files and len(up_files) >= 1:
+            
+            # [PERBAIKAN] Validasi UI jumlah file untuk fitur RAK
+            if len(up_files) < 2:
+                st.warning("⚠️ RAK membutuhkan minimal 2 file (Cabang dan Pusat). Aplikasi hanya akan fokus pada deteksi subledger dan trial balance.")
+
             for key in list(st.session_state.keys()):
                 if key != "audit_logs":
                     del st.session_state[key]
@@ -727,18 +776,24 @@ def main():
         if "Kredit" in df_to_export.columns:
             df_to_export["Kredit"] = df_to_export["Kredit"].apply(to_num)
 
-        e1.download_button(
-            "🖨️ Cetak PDF",
-            build_pdf_report(
+        # Download PDF Handler
+        if REPORTLAB_AVAILABLE:
+            pdf_data = build_pdf_report(
                 df_to_export,
                 st.session_state.get("rak"),
                 st.session_state.get("subledger_analysis"),
-            ),
-            f"Laporan_Analisis_RAK_{datetime.now():%Y%m%d_%H%M}.pdf",
-            "application/pdf",
-            use_container_width=True,
-        )
+            )
+            e1.download_button(
+                "🖨️ Cetak PDF",
+                pdf_data,
+                f"Laporan_Analisis_RAK_{datetime.now():%Y%m%d_%H%M}.pdf",
+                "application/pdf",
+                use_container_width=True,
+            )
+        else:
+            e1.error("Modul reportlab tidak terpasang. PDF tidak tersedia.")
 
+        # Download Excel Handler
         buf = BytesIO()
         with pd.ExcelWriter(buf) as w:
             df_to_export.to_excel(w, index=False)
