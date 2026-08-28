@@ -2,7 +2,7 @@
 # COPYRIGHT & LICENSE NOTICE
 # Copyright (c) 2026 Damianus Libertus. All Rights Reserved.
 # Application: Aplikasi Analisis Jurnal & Rekonsiliasi
-# =========================================================
+# ==========================================================
 
 import io
 import os
@@ -94,103 +94,36 @@ STD_COLS = [
     "Kredit",
 ]
 
-def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
-    if df_raw is None or df_raw.empty:
-        return pd.DataFrame(columns=STD_COLS), "unknown", 0.0
-    df = df_raw.copy().dropna(how="all")
-    saldo_awal_val = 0.0
-    
-    for idx, row in df.head(15).iterrows():
-        row_str = " ".join([str(val) for val in row.values if pd.notna(val)]).lower()
-        if "saldo awal" in row_str:
-            for val in row.values:
-                num = to_num(val)
-                if num != 0.0:
-                    saldo_awal_val = num
-        if ("debet" in row_str or "deb" in row_str) and ("kredit" in row_str or "kred" in row_str):
-            df.columns = [str(val).strip() for val in row.values]
-            df = df.iloc[idx + 1:].reset_index(drop=True)
-            break
-
-    df.columns = [str(c).strip() for c in df.columns]
-    col_map = {}
-    assigned_targets = set()
-    for c in df.columns:
-        cl = c.strip().lower().replace("\n", " ")
-        target = None
-        if ("tgl" in cl or "tanggal" in cl) and "Tanggal" not in assigned_targets:
-            target = "Tanggal"
-        elif cl in ["kd", "jenis", "tipe", "jurnal"] and "KD" not in assigned_targets:
-            target = "KD"
-        elif ("bukti" in cl or "ref" in cl) and "No. Bukti" not in assigned_targets:
-            target = "No. Bukti"
-        elif (("kode" in cl and "perkiraan" in cl) or cl == "kode") and "Kode Perkiraan" not in assigned_targets:
-            target = "Kode Perkiraan"
-        elif (("nama" in cl and "perkiraan" in cl) or cl == "akun") and "Nama Perkiraan" not in assigned_targets:
-            target = "Nama Perkiraan"
-        elif ("uraian" in cl or "keterangan" in cl or "u r a i a n" in cl) and "Uraian" not in assigned_targets:
-            target = "Uraian"
-        elif (cl.startswith("debet") or "debet" in cl) and "Debet" not in assigned_targets:
-            target = "Debet"
-        elif (cl.startswith("kredit") or "kredit" in cl) and "Kredit" not in assigned_targets:
-            target = "Kredit"
-        elif "saldo" in cl and "Saldo" not in assigned_targets:
-            target = "Saldo"
-        
-        if target:
-            col_map[c] = target
-            assigned_targets.add(target)
-
-    df = df.rename(columns=col_map)
-    for col in STD_COLS:
-        if col not in df.columns:
-            df[col] = ""
-    cols_to_keep = STD_COLS + (["Saldo"] if "Saldo" in df.columns else [])
-    df = df[cols_to_keep].copy()
-
-    clean_rows = []
-    for _, r in df.iterrows():
-        kd_val = str(r.get("KD", "")).lower().replace(" ", "")
-        bukti_val = str(r.get("No. Bukti", "")).lower().replace(" ", "")
-        uraian_val = str(r.get("Uraian", "")).lower().replace(" ", "")
-        if any(w in kd_val or w in bukti_val for w in ["jumlah", "tot"]) or uraian_val in ["jumlah", "total", "subtotal"]:
-            continue
-        if to_num(r.get("Debet", 0)) == 0.0 and to_num(r.get("Kredit", 0)) == 0.0 and len(uraian_val) < 3:
-            continue
-        clean_rows.append(r)
-
-    df_filtered = pd.DataFrame(clean_rows).reset_index(drop=True) if clean_rows else pd.DataFrame(columns=cols_to_keep)
-    df_filtered["KD"] = df_filtered["KD"].replace(r"^\s*$", np.nan, regex=True).ffill().fillna("JU")
-    df_filtered["No. Bukti"] = df_filtered["No. Bukti"].replace(r"^\s*$", np.nan, regex=True).ffill().fillna("ACC-AUTO")
-    df_filtered["Uraian"] = df_filtered["Uraian"].replace(r"^\s*$", np.nan, regex=True).ffill().fillna("")
-    df_filtered["Debet"] = df_filtered["Debet"].apply(to_num)
-    df_filtered["Kredit"] = df_filtered["Kredit"].apply(to_num)
-    if "Saldo" in df_filtered.columns:
-        df_filtered["Saldo"] = df_filtered["Saldo"].apply(to_num)
-    df_filtered["Source_File"] = filename
-    return df_filtered, "jurnal", saldo_awal_val
-
 def process_uploaded_file(uploaded_file):
     fname = uploaded_file.name
     file_bytes = uploaded_file.getvalue()
     try:
-        if fname.lower().endswith('.csv'):
-            df_sh = pd.read_csv(BytesIO(file_bytes), sep=None, engine='python')
-            cleaned_df, _, _ = universal_clean_and_parse(df_sh, fname)
-            return cleaned_df
+        df_raw = pd.read_excel(BytesIO(file_bytes))
+        
+        # Penanganan khusus berdasarkan file Excel KSP CU Sinar Mulia Sejahtera
+        if "simpanan" in fname.lower() or "simp" in fname.lower() or "harian" in fname.lower():
+            sub = df_raw.iloc[8:].copy()
+            sub.columns = ['Tanggal', 'KD', 'No. Bukti', 'Uraian', 'Debet', 'Kredit', 'Saldo', 'N1', 'N2', 'N3'][:len(sub.columns)]
+            sub = sub.dropna(subset=['Tanggal'])
+            sub['Debet'] = sub['Debet'].apply(to_num)
+            sub['Kredit'] = sub['Kredit'].apply(to_num)
+            sub['Source_File'] = fname
+            return sub[['Tanggal', 'KD', 'No. Bukti', 'Uraian', 'Debet', 'Kredit', 'Source_File']]
         else:
-            xls = pd.ExcelFile(BytesIO(file_bytes))
-            frames = []
-            for sh in xls.sheet_names:
-                df_sh = pd.read_excel(BytesIO(file_bytes), sheet_name=sh)
-                cleaned_df, _, _ = universal_clean_and_parse(df_sh, fname)
-                if not cleaned_df.empty:
-                    frames.append(cleaned_df)
-            if frames:
-                return pd.concat(frames, ignore_index=True)
+            gl = df_raw.iloc[6:].copy()
+            if len(gl.columns) >= 8:
+                gl.columns = ['No', 'No Rekening', 'Nama Nasabah', 'Tanggal', 'No. Bukti', 'KD', 'Setoran', 'Penarikan'][:len(gl.columns)]
+                gl = gl.dropna(subset=['Tanggal'])
+                gl['Debet'] = gl['Setoran'].apply(to_num) if 'Setoran' in gl.columns else 0.0
+                gl['Kredit'] = gl['Penarikan'].apply(to_num) if 'Penarikan' in gl.columns else 0.0
+                gl['Source_File'] = fname
+                gl['Uraian'] = gl['Nama Nasabah'].astype(str) + " (" + gl['No Rekening'].astype(str) + ")"
+                return gl[['Tanggal', 'KD', 'No. Bukti', 'Uraian', 'Debet', 'Kredit', 'Source_File']]
+        
+        return df_raw
     except Exception as e:
         st.error(f"Gagal membaca file {fname}: {e}")
-    return pd.DataFrame(columns=STD_COLS)
+        return pd.DataFrame(columns=STD_COLS)
 
 # ---------- ENGINE RAK & PDF ----------
 def perform_rak_reconciliation(df_all):
@@ -585,7 +518,6 @@ def main():
     if "audit_logs" not in st.session_state:
         st.session_state.audit_logs = []
 
-    # MENGEMBALIKAN WIDGET ASLI: Multi-file uploader universal
     up_files = st.file_uploader(
         "Upload file Excel atau CSV", accept_multiple_files=True, type=["xlsx", "xls", "csv"]
     )
