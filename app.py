@@ -251,7 +251,7 @@ def parse_subledger_simpanan(file_bytes, filename):
                     frames.append(df)
         if frames:
             return pd.concat(frames, ignore_index=True)
-    except Exception as e:
+    except Exception:
         pass
     return pd.DataFrame()
 
@@ -275,7 +275,7 @@ def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
             b_val_lower = b_val.lower()
             num_val = row.get("Setoran", 0.0) or row.get("Penarikan", 0.0)
 
-            if num_val > 0 and b_val_lower not in ["", "nan"] and b_val_lower not in gl_bukti_set:
+            if num_val > 0 and b_val_lower not in ("", "nan") and b_val_lower not in gl_bukti_set:
                 unmatched_subledger.append({
                     "Letak Baris": idx + 1,
                     "Tgl Trans": row.get("Tgl_Trans", "-"),
@@ -525,7 +525,6 @@ def main():
             st.success("Sesi berhasil dibersihkan!")
             st.rerun()
 
-    # MENGEMBALIKAN TOMBOL EKSEKUSI ASLI SUPAYA DATA LANGSUNG MUNCUL
     if st.button("🚀 Ekstrak & Analisis", type="primary"):
         if up_files and len(up_files) >= 1:
             for key in list(st.session_state.keys()):
