@@ -447,6 +447,7 @@ def build_pdf_report(df, rak, sub_res=None):
         elements.append(Spacer(1, 12))
 
     if sub_res:
+        selisih_set = sub_res["selisih_setoran"]
         elements.append(Paragraph("<b>Hasil Uji Kesesuaian Subledger Simpanan vs Buku Besar</b>", h2))
         sub_summary = [
             [Paragraph("<b>Parameter Uji Kesesuaian</b>", header_style), Paragraph("<b>Nilai / Selisih</b>", header_style)],
@@ -467,10 +468,13 @@ def build_pdf_report(df, rak, sub_res=None):
         elements.append(t_sub)
         elements.append(Spacer(1, 8))
 
-        sub_exp = "• <b>Analisis Kesesuaian Setoran & Penarikan:</b> Seluruh transaksi setoran dan penarikan pada subledger nasabah telah diverifikasi terhadap Buku Besar (General Ledger).<br/>"
-        sub_exp += f"• <b>Total Nilai:</b> Total setoran subledger tercatat sebesar <b>{rupiah(sub_res['tot_setoran'])}</b> dan total kredit Buku Besar sebesar <b>{rupiah(sub_res['tot_kredit_gl'])}</b>.<br/>"
-        sub_exp += "• <b>Status Posting & Bukti Transaksi:</b> Berdasarkan uji petik nomor bukti, seluruh transaksi tercatat aktif dan sudah ter-posting secara konsisten di kedua belah berkas.<br/>"
-        sub_exp += "• <b>Rekomendasi Tindak Lanjut:</b> Pencatatan transaksi tabungan telah sinkron. Pastikan konsistensi penomoran bukti tetap terjaga untuk memudahkan audit berikutnya."
+        if abs(selisih_set) < 1.0:
+            sub_exp = "• <b>Analisis Kesesuaian Setoran & Penarikan:</b> Seluruh transaksi setoran dan penarikan pada subledger nasabah telah terverifikasi sinkron terhadap Buku Besar (General Ledger).<br/>"
+            sub_exp += "• <b>Status Posting:</b> Berdasarkan uji petik nomor bukti, seluruh transaksi tercatat aktif dan sudah ter-posting secara konsisten."
+        else:
+            sub_exp = f"• <b>Analisis Kesesuaian Setoran & Penarikan:</b> Ditemukan selisih setoran sebesar <b>{rupiah(selisih_set)}</b> antara Subledger Nasabah dan Buku Besar (GL).<br/>"
+            sub_exp += f"• <b>Indikasi Temuan Audit:</b> Terdapat transaksi pada Subledger/GL yang belum tercatat atau belum ter-posting sempurna (ditandai baris merah pada rincian jurnal di bawah).<br/>"
+            sub_exp += "• <b>Rekomendasi Tindak Lanjut:</b> Lakukan penelusuran slip transaksi harian untuk mencocokkan kembali entry yang gantung."
 
         elements.append(Paragraph(sub_exp, body_style))
         elements.append(Spacer(1, 12))
@@ -480,16 +484,27 @@ def build_pdf_report(df, rak, sub_res=None):
         headers = [Paragraph(f"<b>{c}</b>", header_style) for c in df.columns]
         table_data = [headers]
 
-        unmatched_uraian = set()
+        unmatched_refs = set()
         if rak:
             for _, r in pd.concat([rak.get("un_c", pd.DataFrame()), rak.get("un_p", pd.DataFrame())]).iterrows():
                 if "Uraian" in r:
-                    unmatched_uraian.add(str(r["Uraian"]).strip().lower())
+                    unmatched_refs.add(str(r["Uraian"]).strip().lower())
+        
+        if sub_res and "df_unmatched_subledger" in sub_res:
+            df_un_sub = sub_res["df_unmatched_subledger"]
+            if not df_un_sub.empty and "No Bukti" in df_un_sub.columns:
+                for b_val in df_un_sub["No Bukti"].dropna():
+                    unmatched_refs.add(str(b_val).strip().lower())
 
         bad_rows = []
         for idx, row in df.iterrows():
             uraian_row = str(row.get("Uraian", "")).strip().lower()
-            is_unmatched = any(u in uraian_row for u in unmatched_uraian if len(u) > 3)
+            bukti_row = str(row.get("No. Bukti", "")).strip().lower()
+            
+            is_unmatched = (
+                any(u in uraian_row for u in unmatched_refs if len(u) > 3) or 
+                (bukti_row in unmatched_refs and bukti_row != "")
+            )
             if is_unmatched:
                 bad_rows.append(idx + 1)
 
