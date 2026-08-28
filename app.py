@@ -99,8 +99,6 @@ def process_uploaded_file(uploaded_file):
     file_bytes = uploaded_file.getvalue()
     try:
         df_raw = pd.read_excel(BytesIO(file_bytes))
-        
-        # Penanganan khusus berdasarkan file Excel KSP CU Sinar Mulia Sejahtera
         if "simpanan" in fname.lower() or "simp" in fname.lower() or "harian" in fname.lower():
             sub = df_raw.iloc[8:].copy()
             sub.columns = ['Tanggal', 'KD', 'No. Bukti', 'Uraian', 'Debet', 'Kredit', 'Saldo', 'N1', 'N2', 'N3'][:len(sub.columns)]
@@ -119,7 +117,6 @@ def process_uploaded_file(uploaded_file):
                 gl['Source_File'] = fname
                 gl['Uraian'] = gl['Nama Nasabah'].astype(str) + " (" + gl['No Rekening'].astype(str) + ")"
                 return gl[['Tanggal', 'KD', 'No. Bukti', 'Uraian', 'Debet', 'Kredit', 'Source_File']]
-        
         return df_raw
     except Exception as e:
         st.error(f"Gagal membaca file {fname}: {e}")
@@ -252,7 +249,6 @@ def parse_subledger_simpanan(file_bytes, filename):
                 if not df.empty:
                     df["Source_File"] = filename
                     frames.append(df)
-        
         if frames:
             return pd.concat(frames, ignore_index=True)
     except Exception as e:
@@ -274,7 +270,6 @@ def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
     unmatched_subledger = []
     if "No_Bukti" in df_subledger.columns and "No. Bukti" in df_gl.columns:
         gl_bukti_set = set(df_gl["No. Bukti"].dropna().astype(str).str.strip().str.lower().unique())
-        
         for idx, row in df_subledger.iterrows():
             b_val = str(row.get("No_Bukti", "")).strip()
             b_val_lower = b_val.lower()
@@ -530,39 +525,41 @@ def main():
             st.success("Sesi berhasil dibersihkan!")
             st.rerun()
 
-    if up_files and len(up_files) >= 1:
-        for key in list(st.session_state.keys()):
-            if key != "audit_logs":
-                del st.session_state[key]
+    # MENGEMBALIKAN TOMBOL EKSEKUSI ASLI SUPAYA DATA LANGSUNG MUNCUL
+    if st.button("🚀 Ekstrak & Analisis", type="primary"):
+        if up_files and len(up_files) >= 1:
+            for key in list(st.session_state.keys()):
+                if key != "audit_logs":
+                    del st.session_state[key]
 
-        all_frames = [process_uploaded_file(f) for f in up_files]
-        combined = pd.concat(all_frames, ignore_index=True) if all_frames else pd.DataFrame(columns=STD_COLS)
+            all_frames = [process_uploaded_file(f) for f in up_files]
+            combined = pd.concat(all_frames, ignore_index=True) if all_frames else pd.DataFrame(columns=STD_COLS)
 
-        subledger_frames = []
-        for f in up_files:
-            df_sub = parse_subledger_simpanan(f.getvalue(), f.name)
-            if not df_sub.empty:
-                subledger_frames.append(df_sub)
+            subledger_frames = []
+            for f in up_files:
+                df_sub = parse_subledger_simpanan(f.getvalue(), f.name)
+                if not df_sub.empty:
+                    subledger_frames.append(df_sub)
 
-        if not combined.empty:
-            st.session_state.df = combined
-            st.session_state.rak = perform_rak_reconciliation(combined)
-            st.session_state.audit_logs.append({
-                "Waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "Aksi": "Ekstrak File",
-                "Keterangan": f"Berhasil memuat {len(combined)} baris dari {len(up_files)} file."
-            })
+            if not combined.empty:
+                st.session_state.df = combined
+                st.session_state.rak = perform_rak_reconciliation(combined)
+                st.session_state.audit_logs.append({
+                    "Waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "Aksi": "Ekstrak File",
+                    "Keterangan": f"Berhasil memuat {len(combined)} baris dari {len(up_files)} file."
+                })
 
-        if subledger_frames and not combined.empty:
-            combined_sub = pd.concat(subledger_frames, ignore_index=True)
-            st.session_state.subledger_analysis = perform_subledger_vs_gl_analysis(
-                combined_sub, combined
-            )
-        else:
-            st.session_state.subledger_analysis = None
+            if subledger_frames and not combined.empty:
+                combined_sub = pd.concat(subledger_frames, ignore_index=True)
+                st.session_state.subledger_analysis = perform_subledger_vs_gl_analysis(
+                    combined_sub, combined
+                )
+            else:
+                st.session_state.subledger_analysis = None
 
-        st.success(f"Berhasil mengekstrak {len(combined)} baris data!")
-        st.rerun()
+            st.success(f"Berhasil mengekstrak {len(combined)} baris data!")
+            st.rerun()
 
     if "df" in st.session_state and st.session_state.df is not None and not st.session_state.df.empty:
         df_current = st.session_state.df
