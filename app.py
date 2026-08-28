@@ -15,30 +15,27 @@ import io
 
 st.title("Aplikasi Analisis Jurnal & Rekonsiliasi Keuangan")
 
-# Widget Upload File di Streamlit
+# Widget Upload File Sesuai Interface Asli
 uploaded_sub = st.file_uploader("Upload File Buku Besar / Simpanan Harian (Excel)", type=["xls", "xlsx"])
 uploaded_gl = st.file_uploader("Upload File Laporan Transaksi / GL (Excel)", type=["xls", "xlsx"])
 
 if uploaded_sub and uploaded_gl:
-    # Load data langsung dari file yang di-upload pengguna
+    # Membaca file langsung dari upload user tanpa path lokal
     df_sub = pd.read_excel(uploaded_sub)
     df_gl = pd.read_excel(uploaded_gl)
     
-    # Clean subledger (Buku Besar / Simpanan Harian)
     sub = df_sub.iloc[8:].copy()
     sub.columns = ['Tgl', 'Kode', 'Bukti', 'Uraian', 'Debet', 'Kredit', 'Saldo', 'N1', 'N2', 'N3']
     sub = sub[['Tgl', 'Kode', 'Bukti', 'Uraian', 'Debet', 'Kredit', 'Saldo']].dropna(subset=['Tgl'])
     sub['Debet'] = pd.to_numeric(sub['Debet'], errors='coerce').fillna(0)
     sub['Kredit'] = pd.to_numeric(sub['Kredit'], errors='coerce').fillna(0)
     
-    # Clean GL (Laporan Transaksi / Subledger Nasabah)
     gl = df_gl.iloc[6:].copy()
     gl.columns = ['No', 'Rekening', 'Nama', 'Tgl', 'Bukti', 'KodeTrans', 'Setoran', 'Penarikan']
     gl = gl[['Tgl', 'Bukti', 'Setoran', 'Penarikan']].dropna(subset=['Tgl'])
     gl['Setoran'] = pd.to_numeric(gl['Setoran'], errors='coerce').fillna(0)
     gl['Penarikan'] = pd.to_numeric(gl['Penarikan'], errors='coerce').fillna(0)
     
-    # Kalkulasi Total & Selisih
     total_setoran_nasabah = gl['Setoran'].sum()
     total_kredit_gl = sub['Kredit'].sum()
     total_penarikan_nasabah = gl['Penarikan'].sum()
@@ -47,15 +44,14 @@ if uploaded_sub and uploaded_gl:
     selisih_setoran = total_kredit_gl - total_setoran_nasabah
     selisih_penarikan = total_debet_gl - total_penarikan_nasabah
     
-    st.subheader("Hasil Parameter Uji Kesesuaian")
-    st.write(f"- **Total Setoran Subledger Nasabah:** Rp {total_setoran_nasabah:,.2f}")
+    st.success("File Berhasil Dimuat & Dianalisis!")
+    st.write(f"**Total Setoran Subledger Nasabah:** Rp {total_setoran_nasabah:,.2f}")
     st.write(f"- **Total Kredit Buku Besar (GL):** Rp {total_kredit_gl:,.2f}")
     st.write(f"- **Selisih Setoran:** Rp {selisih_setoran:,.2f}")
     st.write(f"- **Total Penarikan Subledger Nasabah:** Rp {total_penarikan_nasabah:,.2f}")
     st.write(f"- **Total Debet Buku Besar (GL):** Rp {total_debet_gl:,.2f}")
     st.write(f"- **Selisih Penarikan:** Rp {selisih_penarikan:,.2f}")
 
-    # Fungsi Generate PDF ke Buffer Memory
     def generate_pdf_buffer():
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
