@@ -1,7 +1,7 @@
 # =========================================================
 # COPYRIGHT & LICENSE NOTICE
 # Copyright (c) 2026 Damianus Libertus. All Rights Reserved.
-# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Dynamic Rows + Audit Trail + Balance & Charts)
+# Application: Aplikasi Analisis Jurnal & Rekonsiliasi
 # =========================================================
 
 from datetime import datetime
@@ -30,7 +30,6 @@ st.set_page_config(
 
 # ---------- UTILITY HELPERS ----------
 
-
 def to_num(x) -> float:
     if x is None or pd.isna(x):
         return 0.0
@@ -54,16 +53,13 @@ def to_num(x) -> float:
             s = s.replace(",", "")
     elif "." in s:
         parts = s.split(".")
-        if len(parts) > 2 or (
-            len(parts) == 2 and len(parts[-1]) == 3 and len(parts[0]) <= 3
-        ):
+        if len(parts) > 2 or (len(parts) == 2 and len(parts[-1]) == 3 and len(parts[0]) <= 3):
             s = s.replace(".", "")
     try:
         v = float(s)
         return -abs(v) if neg else v
     except Exception:
         return 0.0
-
 
 def rupiah(v: float) -> str:
     try:
@@ -75,7 +71,6 @@ def rupiah(v: float) -> str:
         )
     except Exception:
         return str(v)
-
 
 # ---------- UNIVERSAL CLEANING PARSER ----------
 STD_COLS = [
@@ -89,26 +84,21 @@ STD_COLS = [
     "Kredit",
 ]
 
-
 def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
     if df_raw is None or df_raw.empty:
         return pd.DataFrame(columns=STD_COLS), "unknown", 0.0
     df = df_raw.copy().dropna(how="all")
     saldo_awal_val = 0.0
     for idx, row in df.head(15).iterrows():
-        row_str = " ".join(
-            [str(val) for val in row.values if pd.notna(val)]
-        ).lower()
+        row_str = " ".join([str(val) for val in row.values if pd.notna(val)]).lower()
         if "saldo awal" in row_str:
             for val in row.values:
                 num = to_num(val)
                 if num != 0.0:
                     saldo_awal_val = num
-        if ("debet" in row_str or "deb" in row_str) and (
-            "kredit" in row_str or "kred" in row_str
-        ):
+        if ("debet" in row_str or "deb" in row_str) and ("kredit" in row_str or "kred" in row_str):
             df.columns = [str(val).strip() for val in row.values]
-            df = df.iloc[idx + 1 :].reset_index(drop=True)
+            df = df.iloc[idx + 1:].reset_index(drop=True)
             break
 
     df.columns = [str(c).strip() for c in df.columns]
@@ -119,35 +109,19 @@ def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
         target = None
         if ("tgl" in cl or "tanggal" in cl) and "Tanggal" not in assigned_targets:
             target = "Tanggal"
-        elif (
-            cl in ["kd", "jenis", "tipe", "jurnal"]
-            and "KD" not in assigned_targets
-        ):
+        elif cl in ["kd", "jenis", "tipe", "jurnal"] and "KD" not in assigned_targets:
             target = "KD"
         elif ("bukti" in cl or "ref" in cl) and "No. Bukti" not in assigned_targets:
             target = "No. Bukti"
-        elif (
-            ("kode" in cl and "perkiraan" in cl)
-            or cl == "kode"
-            and "Kode Perkiraan" not in assigned_targets
-        ):
+        elif (("kode" in cl and "perkiraan" in cl) or cl == "kode") and "Kode Perkiraan" not in assigned_targets:
             target = "Kode Perkiraan"
-        elif (
-            ("nama" in cl and "perkiraan" in cl) or cl == "akun"
-        ) and "Nama Perkiraan" not in assigned_targets:
+        elif (("nama" in cl and "perkiraan" in cl) or cl == "akun") and "Nama Perkiraan" not in assigned_targets:
             target = "Nama Perkiraan"
-        elif (
-            ("uraian" in cl or "keterangan" in cl or "u r a i a n" in cl)
-            and "Uraian" not in assigned_targets
-        ):
+        elif ("uraian" in cl or "keterangan" in cl or "u r a i a n" in cl) and "Uraian" not in assigned_targets:
             target = "Uraian"
-        elif (
-            cl.startswith("debet") or "debet" in cl
-        ) and "Debet" not in assigned_targets:
+        elif (cl.startswith("debet") or "debet" in cl) and "Debet" not in assigned_targets:
             target = "Debet"
-        elif (
-            cl.startswith("kredit") or "kredit" in cl
-        ) and "Kredit" not in assigned_targets:
+        elif (cl.startswith("kredit") or "kredit" in cl) and "Kredit" not in assigned_targets:
             target = "Kredit"
         elif "saldo" in cl and "Saldo" not in assigned_targets:
             target = "Saldo"
@@ -167,47 +141,22 @@ def universal_clean_and_parse(df_raw: pd.DataFrame, filename: str = ""):
         kd_val = str(r.get("KD", "")).lower().replace(" ", "")
         bukti_val = str(r.get("No. Bukti", "")).lower().replace(" ", "")
         uraian_val = str(r.get("Uraian", "")).lower().replace(" ", "")
-        if any(w in kd_val or w in bukti_val for w in ["jumlah", "tot"]) or uraian_val in [
-            "jumlah",
-            "total",
-            "subtotal",
-        ]:
+        if any(w in kd_val or w in bukti_val for w in ["jumlah", "tot"]) or uraian_val in ["jumlah", "total", "subtotal"]:
             continue
-        if (
-            to_num(r.get("Debet", 0)) == 0.0
-            and to_num(r.get("Kredit", 0)) == 0.0
-            and len(uraian_val) < 3
-        ):
+        if to_num(r.get("Debet", 0)) == 0.0 and to_num(r.get("Kredit", 0)) == 0.0 and len(uraian_val) < 3:
             continue
         clean_rows.append(r)
 
-    df_filtered = (
-        pd.DataFrame(clean_rows).reset_index(drop=True)
-        if clean_rows
-        else pd.DataFrame(columns=cols_to_keep)
-    )
-    df_filtered["KD"] = (
-        df_filtered["KD"].replace(r"^\s*$", np.nan, regex=True).ffill().fillna("JU")
-    )
-    df_filtered["No. Bukti"] = (
-        df_filtered["No. Bukti"]
-        .replace(r"^\s*$", np.nan, regex=True)
-        .ffill()
-        .fillna("ACC-AUTO")
-    )
-    df_filtered["Uraian"] = (
-        df_filtered["Uraian"]
-        .replace(r"^\s*$", np.nan, regex=True)
-        .ffill()
-        .fillna("")
-    )
+    df_filtered = pd.DataFrame(clean_rows).reset_index(drop=True) if clean_rows else pd.DataFrame(columns=cols_to_keep)
+    df_filtered["KD"] = df_filtered["KD"].replace(r"^\s*$", np.nan, regex=True).ffill().fillna("JU")
+    df_filtered["No. Bukti"] = df_filtered["No. Bukti"].replace(r"^\s*$", np.nan, regex=True).ffill().fillna("ACC-AUTO")
+    df_filtered["Uraian"] = df_filtered["Uraian"].replace(r"^\s*$", np.nan, regex=True).ffill().fillna("")
     df_filtered["Debet"] = df_filtered["Debet"].apply(to_num)
     df_filtered["Kredit"] = df_filtered["Kredit"].apply(to_num)
     if "Saldo" in df_filtered.columns:
         df_filtered["Saldo"] = df_filtered["Saldo"].apply(to_num)
     df_filtered["Source_File"] = filename
     return df_filtered, "jurnal", saldo_awal_val
-
 
 def process_uploaded_file(uploaded_file):
     fname = uploaded_file.name
@@ -226,7 +175,6 @@ def process_uploaded_file(uploaded_file):
         st.error(f"Gagal membaca file {fname}: {e}")
     return pd.DataFrame(columns=STD_COLS)
 
-
 # ---------- ENGINE RAK & PDF ----------
 def perform_rak_reconciliation(df_all):
     if "Source_File" not in df_all.columns:
@@ -235,12 +183,8 @@ def perform_rak_reconciliation(df_all):
     if len(files) < 2:
         return None
 
-    df_a = (
-        df_all[df_all["Source_File"] == files[0]].copy().reset_index(drop=True)
-    )
-    df_b = (
-        df_all[df_all["Source_File"] == files[1]].copy().reset_index(drop=True)
-    )
+    df_a = df_all[df_all["Source_File"] == files[0]].copy().reset_index(drop=True)
+    df_b = df_all[df_all["Source_File"] == files[1]].copy().reset_index(drop=True)
 
     f0_lower = str(files[0]).lower()
     if "770" in f0_lower or "pusat" in f0_lower:
@@ -248,16 +192,8 @@ def perform_rak_reconciliation(df_all):
     else:
         df_c, df_p = df_a, df_b
 
-    sal_c = (
-        df_c["Saldo"].iloc[-1]
-        if "Saldo" in df_c.columns and (df_c["Saldo"] != 0).any()
-        else (df_c["Debet"].sum() - df_c["Kredit"].sum())
-    )
-    sal_p = (
-        df_p["Saldo"].iloc[-1]
-        if "Saldo" in df_p.columns and (df_p["Saldo"] != 0).any()
-        else (df_p["Debet"].sum() - df_p["Kredit"].sum())
-    )
+    sal_c = df_c["Saldo"].iloc[-1] if "Saldo" in df_c.columns and (df_c["Saldo"] != 0).any() else (df_c["Debet"].sum() - df_c["Kredit"].sum())
+    sal_p = df_p["Saldo"].iloc[-1] if "Saldo" in df_p.columns and (df_p["Saldo"] != 0).any() else (df_p["Debet"].sum() - df_p["Kredit"].sum())
 
     debet_c, kredit_c = df_c["Debet"].sum(), df_c["Kredit"].sum()
     debet_p, kredit_p = df_p["Debet"].sum(), df_p["Kredit"].sum()
@@ -269,10 +205,7 @@ def perform_rak_reconciliation(df_all):
         for idx_p, row_p in df_p.iterrows():
             if idx_p in p_used:
                 continue
-            if (
-                abs(row_c["Kredit"] - row_p["Debet"]) < 1.0
-                or abs(row_c["Debet"] - row_p["Kredit"]) < 1.0
-            ):
+            if abs(row_c["Kredit"] - row_p["Debet"]) < 1.0 or abs(row_c["Debet"] - row_p["Kredit"]) < 1.0:
                 matched.append({
                     "Uraian": row_c["Uraian"],
                     "Nominal": rupiah(row_c["Debet"] or row_c["Kredit"]),
@@ -308,7 +241,6 @@ def perform_rak_reconciliation(df_all):
         "un_p": pd.DataFrame(un_p),
     }
 
-
 def parse_subledger_simpanan(file_bytes, filename):
     try:
         raw = pd.read_excel(BytesIO(file_bytes), header=None)
@@ -316,17 +248,9 @@ def parse_subledger_simpanan(file_bytes, filename):
         is_subledger_file = False
         for i, row in raw.iterrows():
             row_str = " ".join([str(v).lower() for v in row.values if pd.notna(v)])
-            if (
-                "laporan transaksi" in row_str
-                or "tabungan" in row_str
-                or "simpanan" in row_str
-            ):
+            if "laporan transaksi" in row_str or "tabungan" in row_str or "simpanan" in row_str:
                 is_subledger_file = True
-            if (
-                "no." in row_str
-                and "rekening" in row_str
-                and ("setoran" in row_str or "penarikan" in row_str)
-            ):
+            if "no." in row_str and "rekening" in row_str and ("setoran" in row_str or "penarikan" in row_str):
                 header_row = i
                 is_subledger_file = True
                 break
@@ -363,22 +287,13 @@ def parse_subledger_simpanan(file_bytes, filename):
     except Exception:
         return pd.DataFrame()
 
-
 def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
     if df_subledger.empty:
         return None
-    tot_setoran = (
-        df_subledger["Setoran"].sum() if "Setoran" in df_subledger.columns else 0.0
-    )
-    tot_penarikan = (
-        df_subledger["Penarikan"].sum()
-        if "Penarikan" in df_subledger.columns
-        else 0.0
-    )
+    tot_setoran = df_subledger["Setoran"].sum() if "Setoran" in df_subledger.columns else 0.0
+    tot_penarikan = df_subledger["Penarikan"].sum() if "Penarikan" in df_subledger.columns else 0.0
 
-    tot_kredit_gl = (
-        df_gl["Kredit"].sum() if "Kredit" in df_gl.columns else 0.0
-    )
+    tot_kredit_gl = df_gl["Kredit"].sum() if "Kredit" in df_gl.columns else 0.0
     tot_debet_gl = df_gl["Debet"].sum() if "Debet" in df_gl.columns else 0.0
 
     selisih_setoran = tot_setoran - tot_kredit_gl
@@ -386,9 +301,7 @@ def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
 
     unmatched_subledger = []
     if "No_Bukti" in df_subledger.columns and "No. Bukti" in df_gl.columns:
-        gl_bukti_set = set(
-            df_gl["No. Bukti"].dropna().astype(str).str.strip().unique()
-        )
+        gl_bukti_set = set(df_gl["No. Bukti"].dropna().astype(str).str.strip().unique())
         for idx, row in df_subledger.iterrows():
             b_val = str(row.get("No_Bukti", "")).strip()
             num_val = row.get("Setoran", 0.0) or row.get("Penarikan", 0.0)
@@ -413,7 +326,6 @@ def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
         "selisih_penarikan": selisih_penarikan,
         "df_unmatched_subledger": pd.DataFrame(unmatched_subledger),
     }
-
 
 def build_pdf_report(df, rak, sub_res=None):
     from reportlab.lib import colors
@@ -494,192 +406,97 @@ def build_pdf_report(df, rak, sub_res=None):
     )
 
     elements.append(Paragraph(f"<b>{APP_TITLE}</b>", title_style))
-    elements.append(
-        Paragraph(
-            f"Hak Cipta © {CURRENT_YEAR} {OWNER}. Seluruh Hak Cipta Dilindungi.",
-            ParagraphStyle("Sub", parent=styles["Normal"], fontSize=8, textColor=colors.grey),
-        )
-    )
-    elements.append(
-        Paragraph(
-            f"<i>Tanggal Cetak: {datetime.now().strftime('%d-%m-%Y %H:%M WIB')}</i>",
-            ParagraphStyle("Sub2", parent=styles["Normal"], fontSize=8, textColor=colors.grey),
-        )
-    )
+    elements.append(Paragraph(f"Hak Cipta © {CURRENT_YEAR} {OWNER}. Seluruh Hak Cipta Dilindungi.", ParagraphStyle("Sub", parent=styles["Normal"], fontSize=8, textColor=colors.grey)))
+    elements.append(Paragraph(f"<i>Tanggal Cetak: {datetime.now().strftime('%d-%m-%Y %H:%M WIB')}</i>", ParagraphStyle("Sub2", parent=styles["Normal"], fontSize=8, textColor=colors.grey)))
     elements.append(Spacer(1, 10))
 
     if rak:
         summary_data = [
-            [
-                Paragraph("<b>Keterangan</b>", header_style),
-                Paragraph("<b>Nilai</b>", header_style),
-            ],
-            [
-                Paragraph("Saldo Akhir Cabang", cell_style),
-                Paragraph(rupiah(rak["sal_c"]), cell_style),
-            ],
-            [
-                Paragraph("Saldo Akhir Pusat", cell_style),
-                Paragraph(rupiah(rak["sal_p"]), cell_style),
-            ],
-            [
-                Paragraph("Selisih Pembukuan", cell_style),
-                Paragraph(rupiah(rak["selisih"]), cell_style),
-            ],
+            [Paragraph("<b>Keterangan</b>", header_style), Paragraph("<b>Nilai</b>", header_style)],
+            [Paragraph("Saldo Akhir Cabang", cell_style), Paragraph(rupiah(rak["sal_c"]), cell_style)],
+            [Paragraph("Saldo Akhir Pusat", cell_style), Paragraph(rupiah(rak["sal_p"]), cell_style)],
+            [Paragraph("Selisih Pembukuan", cell_style), Paragraph(rupiah(rak["selisih"]), cell_style)],
         ]
         t_sum = Table(summary_data, colWidths=[140 * mm, 126 * mm])
-        t_sum.setStyle(
-            TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), navy),
-                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ])
-        )
+        t_sum.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), navy),
+            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
         elements.append(t_sum)
         elements.append(Spacer(1, 10))
 
-        elements.append(
-            Paragraph("<b>Analisis & Penjelasan Penyebab Selisih RAK</b>", h2)
-        )
+        elements.append(Paragraph("<b>Analisis & Penjelasan Penyebab Selisih RAK</b>", h2))
         un_c_df = rak.get("un_c", pd.DataFrame())
         un_p_df = rak.get("un_p", pd.DataFrame())
         selisih_val = rak["selisih"]
 
-        exp_text = (
-            f"• <b>Saldo Akhir Buku Besar:</b> Saldo Akhir Kantor Cabang tercatat"
-            f" sebesar <b>{rupiah(rak['sal_c'])}</b>, sedangkan Saldo Akhir Kantor"
-            f" Pusat tercatat sebesar <b>{rupiah(rak['sal_p'])}</b>.<br/>"
-        )
-        exp_text += (
-            f"• <b>Selisih Pembukuan:</b> Selisih sebesar"
-            f" <b>{rupiah(selisih_val)}</b> merupakan selisih saldo akhir riil"
-            f" antara pembukuan Pusat dan Cabang.<br/>"
-        )
-        exp_text += (
-            "• <b>Definisi Transaksi Gantung (Outstanding):</b> Transaksi yang"
-            " sudah dicatat oleh salah satu pihak (misal Cabang) namun belum"
-            " dicatat/di-posting oleh pihak seberangnya (Pusat) pada periode"
-            " yang sama.<br/>"
-        )
+        exp_text = f"• <b>Saldo Akhir Buku Besar:</b> Saldo Akhir Kantor Cabang tercatat sebesar <b>{rupiah(rak['sal_c'])}</b>, sedangkan Saldo Akhir Kantor Pusat tercatat sebesar <b>{rupiah(rak['sal_p'])}</b>.<br/>"
+        exp_text += f"• <b>Selisih Pembukuan:</b> Selisih sebesar <b>{rupiah(selisih_val)}</b> merupakan selisih saldo akhir riil antara pembukuan Pusat dan Cabang.<br/>"
+        exp_text += "• <b>Definisi Transaksi Gantung (Outstanding):</b> Transaksi yang sudah dicatat oleh salah satu pihak (misal Cabang) namun belum dicatat/di-posting oleh pihak seberangnya (Pusat) pada periode yang sama.<br/>"
         if not un_c_df.empty:
-            exp_text += (
-                f"• <b>Transaksi Gantung di Cabang Belum Dicatat di Pusat"
-                f" ({len(un_c_df)} transaksi):</b> Contoh uraian:"
-                f" <i>{un_c_df.iloc[0].get('Uraian', 'N/A')}</i> senilai"
-                f" <b>{un_c_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
-            )
+            exp_text += f"• <b>Transaksi Gantung di Cabang Belum Dicatat di Pusat ({len(un_c_df)} transaksi):</b> Contoh uraian: <i>{un_c_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_c_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
         if not un_p_df.empty:
-            exp_text += (
-                f"• <b>Transaksi Gantung di Pusat Belum Dicatat di Cabang"
-                f" ({len(un_p_df)} transaksi):</b> Contoh uraian:"
-                f" <i>{un_p_df.iloc[0].get('Uraian', 'N/A')}</i> senilai"
-                f" <b>{un_p_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
-            )
-        exp_text += (
-            "• <b>Rekomendasi Auditor:</b> Lakukan konfirmasi timbal balik"
-            " antar kantor dan buat jurnal penyesuaian (adjustment entries) untuk"
-            " memulihkan kesesuaian laporan."
-        )
+            exp_text += f"• <b>Transaksi Gantung di Pusat Belum Dicatat di Cabang ({len(un_p_df)} transaksi):</b> Contoh uraian: <i>{un_p_df.iloc[0].get('Uraian', 'N/A')}</i> senilai <b>{un_p_df.iloc[0].get('Nominal', 'N/A')}</b>.<br/>"
+        exp_text += "• <b>Rekomendasi Auditor:</b> Lakukan konfirmasi timbal balik antar kantor dan buat jurnal penyesuaian (adjustment entries) untuk memulihkan kesesuaian laporan."
 
         elements.append(Paragraph(exp_text, body_style))
         elements.append(Spacer(1, 12))
 
     if sub_res:
-        elements.append(
-            Paragraph("<b>Hasil Uji Kesesuaian Subledger Simpanan vs Buku Besar</b>", h2)
-        )
+        elements.append(Paragraph("<b>Hasil Uji Kesesuaian Subledger Simpanan vs Buku Besar</b>", h2))
         sub_summary = [
-            [
-                Paragraph("<b>Parameter Uji Kesesuaian</b>", header_style),
-                Paragraph("<b>Nilai / Selisih</b>", header_style),
-            ],
-            [
-                Paragraph("Total Setoran (Subledger Nasabah)", cell_style),
-                Paragraph(rupiah(sub_res["tot_setoran"]), cell_style),
-            ],
-            [
-                Paragraph("Total Kredit di Buku Besar (GL)", cell_style),
-                Paragraph(rupiah(sub_res["tot_kredit_gl"]), cell_style),
-            ],
-            [
-                Paragraph("Selisih Setoran", cell_style),
-                Paragraph(rupiah(sub_res["selisih_setoran"]), cell_style),
-            ],
-            [
-                Paragraph("Selisih Penarikan", cell_style),
-                Paragraph(rupiah(sub_res["selisih_penarikan"]), cell_style),
-            ],
+            [Paragraph("<b>Parameter Uji Kesesuaian</b>", header_style), Paragraph("<b>Nilai / Selisih</b>", header_style)],
+            [Paragraph("Total Setoran (Subledger Nasabah)", cell_style), Paragraph(rupiah(sub_res["tot_setoran"]), cell_style)],
+            [Paragraph("Total Kredit di Buku Besar (GL)", cell_style), Paragraph(rupiah(sub_res["tot_kredit_gl"]), cell_style)],
+            [Paragraph("Selisih Setoran", cell_style), Paragraph(rupiah(sub_res["selisih_setoran"]), cell_style)],
+            [Paragraph("Selisih Penarikan", cell_style), Paragraph(rupiah(sub_res["selisih_penarikan"]), cell_style)],
         ]
         t_sub = Table(sub_summary, colWidths=[140 * mm, 126 * mm])
-        t_sub.setStyle(
-            TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), navy),
-                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ])
-        )
+        t_sub.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), navy),
+            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
         elements.append(t_sub)
         elements.append(Spacer(1, 8))
 
-        sub_exp = (
-            "• <b>Analisis Kesesuaian Setoran & Penarikan:</b> Seluruh transaksi setoran dan penarikan pada subledger nasabah telah diverifikasi terhadap Buku Besar (General Ledger).<br/>"
-        )
-        sub_exp += (
-            f"• <b>Total Nilai:</b> Total setoran subledger tercatat sebesar <b>{rupiah(sub_res['tot_setoran'])}</b> dan total kredit Buku Besar sebesar <b>{rupiah(sub_res['tot_kredit_gl'])}</b>.<br/>"
-        )
-        sub_exp += (
-            "• <b>Status Posting & Bukti Transaksi:</b> Berdasarkan uji petik nomor bukti, seluruh transaksi tercatat aktif dan sudah ter-posting secara konsisten di kedua belah berkas.<br/>"
-        )
-        sub_exp += (
-            "• <b>Rekomendasi Tindak Lanjut:</b> Pencatatan transaksi tabungan telah sinkron. Pastikan konsistensi penomoran bukti tetap terjaga untuk memudahkan audit berikutnya."
-        )
+        sub_exp = "• <b>Analisis Kesesuaian Setoran & Penarikan:</b> Seluruh transaksi setoran dan penarikan pada subledger nasabah telah diverifikasi terhadap Buku Besar (General Ledger).<br/>"
+        sub_exp += f"• <b>Total Nilai:</b> Total setoran subledger tercatat sebesar <b>{rupiah(sub_res['tot_setoran'])}</b> dan total kredit Buku Besar sebesar <b>{rupiah(sub_res['tot_kredit_gl'])}</b>.<br/>"
+        sub_exp += "• <b>Status Posting & Bukti Transaksi:</b> Berdasarkan uji petik nomor bukti, seluruh transaksi tercatat aktif dan sudah ter-posting secara konsisten di kedua belah berkas.<br/>"
+        sub_exp += "• <b>Rekomendasi Tindak Lanjut:</b> Pencatatan transaksi tabungan telah sinkron. Pastikan konsistensi penomoran bukti tetap terjaga untuk memudahkan audit berikutnya."
 
         elements.append(Paragraph(sub_exp, body_style))
         elements.append(Spacer(1, 12))
 
     if not df.empty:
-        elements.append(
-            Paragraph(
-                "<b>Rincian Jurnal Transaksi (Baris Ditandai Merah = Indikasi Selisih/Unmatched)</b>",
-                h2,
-            )
-        )
+        elements.append(Paragraph("<b>Rincian Jurnal Transaksi (Baris Ditandai Merah = Indikasi Selisih/Unmatched)</b>", h2))
         headers = [Paragraph(f"<b>{c}</b>", header_style) for c in df.columns]
         table_data = [headers]
 
         unmatched_uraian = set()
         if rak:
-            for _, r in pd.concat([
-                rak.get("un_c", pd.DataFrame()),
-                rak.get("un_p", pd.DataFrame()),
-            ]).iterrows():
+            for _, r in pd.concat([rak.get("un_c", pd.DataFrame()), rak.get("un_p", pd.DataFrame())]).iterrows():
                 if "Uraian" in r:
                     unmatched_uraian.add(str(r["Uraian"]).strip().lower())
 
         bad_rows = []
         for idx, row in df.iterrows():
             uraian_row = str(row.get("Uraian", "")).strip().lower()
-            is_unmatched = any(
-                u in uraian_row for u in unmatched_uraian if len(u) > 3
-            )
+            is_unmatched = any(u in uraian_row for u in unmatched_uraian if len(u) > 3)
             if is_unmatched:
                 bad_rows.append(idx + 1)
 
             r_cells = []
             for col in df.columns:
                 val = row[col]
-                txt = (
-                    rupiah(val)
-                    if isinstance(val, (int, float))
-                    and col not in ["KD", "No. Bukti", "Kode Perkiraan"]
-                    else str(val)
-                )
+                txt = rupiah(val) if isinstance(val, (int, float)) and col not in ["KD", "No. Bukti", "Kode Perkiraan"] else str(val)
                 style_to_use = cell_red_style if is_unmatched else cell_style
                 r_cells.append(Paragraph(txt, style_to_use))
             table_data.append(r_cells)
@@ -694,20 +511,13 @@ def build_pdf_report(df, rak, sub_res=None):
             ("ALIGN", (0, 0), (-1, -1), "LEFT"),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-            (
-                "ROWBACKGROUNDS",
-                (0, 1),
-                (-1, -1),
-                [colors.white, colors.HexColor("#f8fafc")],
-            ),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
             ("TOPPADDING", (0, 0), (-1, -1), 4),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ]
 
         for r_idx in bad_rows:
-            t_style_cmds.append(
-                ("BACKGROUND", (0, r_idx), (-1, r_idx), colors.HexColor("#FEE2E2"))
-            )
+            t_style_cmds.append(("BACKGROUND", (0, r_idx), (-1, r_idx), colors.HexColor("#FEE2E2")))
 
         t_main.setStyle(TableStyle(t_style_cmds))
         elements.append(t_main)
@@ -715,12 +525,10 @@ def build_pdf_report(df, rak, sub_res=None):
     doc.build(elements)
     return buf.getvalue()
 
-
 # ---------- ANTARMUKA UTAMA ----------
 def main():
     st.markdown(f"# 📊 {APP_TITLE}")
     
-    # Initialize Audit Trail / Log History in session state
     if "audit_logs" not in st.session_state:
         st.session_state.audit_logs = []
 
@@ -743,11 +551,7 @@ def main():
                     del st.session_state[key]
 
             all_frames = [process_uploaded_file(f) for f in up_files]
-            combined = (
-                pd.concat(all_frames, ignore_index=True)
-                if all_frames
-                else pd.DataFrame(columns=STD_COLS)
-            )
+            combined = pd.concat(all_frames, ignore_index=True) if all_frames else pd.DataFrame(columns=STD_COLS)
 
             subledger_frames = []
             for f in up_files:
@@ -758,7 +562,6 @@ def main():
             if not combined.empty:
                 st.session_state.df = combined
                 st.session_state.rak = perform_rak_reconciliation(combined)
-                # Log action
                 st.session_state.audit_logs.append({
                     "Waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "Aksi": "Ekstrak File",
@@ -776,14 +579,9 @@ def main():
             st.success(f"Berhasil mengekstrak {len(combined)} baris data!")
             st.rerun()
 
-    if (
-        "df" in st.session_state
-        and st.session_state.df is not None
-        and not st.session_state.df.empty
-    ):
+    if "df" in st.session_state and st.session_state.df is not None and not st.session_state.df.empty:
         df_current = st.session_state.df
 
-        # --- FITUR 1: TRIAL BALANCE CHECK (VALIDASI KESEIMBANGAN) ---
         if "Debet" in df_current.columns and "Kredit" in df_current.columns:
             tot_db = df_current["Debet"].apply(to_num).sum()
             tot_kr = df_current["Kredit"].apply(to_num).sum()
@@ -810,13 +608,10 @@ def main():
             
             t1, t2, t3 = st.tabs(["🔴 Selisih & Unmatched", "✅ Matched", "📈 Grafik RAK"])
             with t1:
-                st.dataframe(
-                    pd.concat([rak["un_c"], rak["un_p"]]), use_container_width=True
-                )
+                st.dataframe(pd.concat([rak["un_c"], rak["un_p"]]), use_container_width=True)
             with t2:
                 st.dataframe(rak["matched"], use_container_width=True)
             with t3:
-                # --- FITUR 3: GRAFIK VISUALISASI RAK ---
                 chart_data = pd.DataFrame({
                     "Kategori": ["Cabang", "Pusat"],
                     "Saldo Akhir": [rak["sal_c"], rak["sal_p"]]
@@ -830,31 +625,19 @@ def main():
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Total Setoran", rupiah(sub_res["tot_setoran"]))
             m2.metric("Total Kredit (GL)", rupiah(sub_res["tot_kredit_gl"]))
-            m3.metric(
-                "Selisih Setoran",
-                rupiah(sub_res["selisih_setoran"]),
-                delta_color="inverse",
-            )
-            m4.metric(
-                "Selisih Penarikan",
-                rupiah(sub_res["selisih_penarikan"]),
-                delta_color="inverse",
-            )
+            m3.metric("Selisih Setoran", rupiah(sub_res["selisih_setoran"]), delta_color="inverse")
+            m4.metric("Selisih Penarikan", rupiah(sub_res["selisih_penarikan"]), delta_color="inverse")
 
             st.warning("📍 **Audit Trail / Letak Ketidaksesuaian Transaksi:**")
             df_un = sub_res["df_unmatched_subledger"]
             if not df_un.empty:
                 st.dataframe(df_un, use_container_width=True)
             else:
-                st.success(
-                    "Semua transaksi di Subledger cocok dan ter-posting sempurna ke Buku Besar."
-                )
+                st.success("Semua transaksi di Subledger cocok dan ter-posting sempurna ke Buku Besar.")
 
         st.subheader("② Pratinjau & Edit Data Jurnal")
 
-        with st.expander(
-            "🛠️ Panel Pengaturan Tabel (Kolom & Posisi Baris)", expanded=False
-        ):
+        with st.expander("🛠️ Panel Pengaturan Tabel (Kolom & Posisi Baris)", expanded=False):
             c1, c2, c3 = st.columns(3)
             with c1:
                 col_add = st.text_input("Nama Kolom Baru:")
@@ -868,9 +651,7 @@ def main():
                         })
                         st.rerun()
             with c2:
-                col_del = st.selectbox(
-                    "Pilih Kolom Dihapus:", st.session_state.df.columns
-                )
+                col_del = st.selectbox("Pilih Kolom Dihapus:", st.session_state.df.columns)
                 if st.button("🗑️ Hapus Kolom"):
                     st.session_state.df = st.session_state.df.drop(columns=[col_del])
                     st.session_state.audit_logs.append({
@@ -888,20 +669,14 @@ def main():
                 )
                 if st.button("📍 Sisipkan Baris Baru"):
                     new_row = {
-                        c: (
-                            ""
-                            if c not in ["Debet", "Kredit", "Saldo"]
-                            else 0.0
-                        )
+                        c: ("" if c not in ["Debet", "Kredit", "Saldo"] else 0.0)
                         for c in st.session_state.df.columns
                     }
                     idx_int = int(insert_idx)
-                    df_top = st.session_state.df.iloc[: idx_int + 1]
-                    df_bottom = st.session_state.df.iloc[idx_int + 1 :]
+                    df_top = st.session_state.df.iloc[:idx_int + 1]
+                    df_bottom = st.session_state.df.iloc[idx_int + 1:]
                     df_new_row = pd.DataFrame([new_row])
-                    st.session_state.df = pd.concat(
-                        [df_top, df_new_row, df_bottom], ignore_index=True
-                    )
+                    st.session_state.df = pd.concat([df_top, df_new_row, df_bottom], ignore_index=True)
                     st.session_state.audit_logs.append({
                         "Waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "Aksi": "Sisip Baris",
@@ -910,7 +685,6 @@ def main():
                     st.success(f"Baris berhasil disisipkan setelah indeks {idx_int}!")
                     st.rerun()
 
-        # Data Editor Interaktif
         edited_df = st.data_editor(
             st.session_state.df, num_rows="dynamic", use_container_width=True
         )
@@ -922,7 +696,6 @@ def main():
                 "Keterangan": "Pengguna melakukan perubahan langsung pada sel tabel jurnal."
             })
 
-        # --- FITUR 2: AUDIT TRAIL / RIWAYAT PERUBAHAN DATA (LOG HISTORY) ---
         with st.expander("📜 Lihat Audit Trail & Riwayat Perubahan Sesi", expanded=False):
             if st.session_state.audit_logs:
                 df_logs = pd.DataFrame(st.session_state.audit_logs)
@@ -958,12 +731,9 @@ def main():
             "📊 Download Excel",
             buf.getvalue(),
             f"Hasil_Analisis_RAK_{datetime.now():%Y%m%d_%H%M}.xlsx",
-            (
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            ),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
-
 
 if __name__ == "__main__":
     main()
