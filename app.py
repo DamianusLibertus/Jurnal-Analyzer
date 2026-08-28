@@ -1,7 +1,7 @@
 # =========================================================
 # COPYRIGHT & LICENSE NOTICE
 # Copyright (c) 2026 Damianus Libertus. All Rights Reserved.
-# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Dynamic Rows)
+# Application: Aplikasi Analisis Jurnal & Rekonsiliasi (Dynamic Rows + Audit Trail + Balance & Charts)
 # =========================================================
 
 from datetime import datetime
@@ -222,8 +222,8 @@ def process_uploaded_file(uploaded_file):
                 frames.append(cleaned_df)
         if frames:
             return pd.concat(frames, ignore_index=True)
-    except:
-        pass
+    except Exception as e:
+        st.error(f"Gagal membaca file {fname}: {e}")
     return pd.DataFrame(columns=STD_COLS)
 
 
@@ -634,7 +634,7 @@ def build_pdf_report(df, rak, sub_res=None):
             f"• <b>Total Nilai:</b> Total setoran subledger tercatat sebesar <b>{rupiah(sub_res['tot_setoran'])}</b> dan total kredit Buku Besar sebesar <b>{rupiah(sub_res['tot_kredit_gl'])}</b>.<br/>"
         )
         sub_exp += (
-            "• <b>Status Posting & Bukti Transaksi:</b> Berdasarkan uji petik nomor bukti (seperti <code>TAB.00130</code> s.d. <code>TAB.00233</code>), seluruh transaksi tercatat aktif dan sudah ter-posting secara konsisten di kedua belah berkas.<br/>"
+            "• <b>Status Posting & Bukti Transaksi:</b> Berdasarkan uji petik nomor bukti, seluruh transaksi tercatat aktif dan sudah ter-posting secara konsisten di kedua belah berkas.<br/>"
         )
         sub_exp += (
             "• <b>Rekomendasi Tindak Lanjut:</b> Pencatatan transaksi tabungan telah sinkron. Pastikan konsistensi penomoran bukti tetap terjaga untuk memudahkan audit berikutnya."
@@ -719,20 +719,28 @@ def build_pdf_report(df, rak, sub_res=None):
 # ---------- ANTARMUKA UTAMA ----------
 def main():
     st.markdown(f"# 📊 {APP_TITLE}")
+    
+    # Initialize Audit Trail / Log History in session state
+    if "audit_logs" not in st.session_state:
+        st.session_state.audit_logs = []
+
     up_files = st.file_uploader(
         "Upload file Excel", accept_multiple_files=True, type=["xlsx", "xls", "csv"]
     )
 
-    if st.button("🔄 Reset / Bersihkan Sesi Data"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.success("Sesi berhasil dibersihkan! Silakan upload file baru.")
-        st.rerun()
+    c_btn1, c_btn2 = st.columns([1, 4])
+    with c_btn1:
+        if st.button("🔄 Reset Sesi"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.success("Sesi berhasil dibersihkan!")
+            st.rerun()
 
     if st.button("🚀 Ekstrak & Analisis", type="primary"):
         if up_files and len(up_files) >= 1:
             for key in list(st.session_state.keys()):
-                del st.session_state[key]
+                if key != "audit_logs":
+                    del st.session_state[key]
 
             all_frames = [process_uploaded_file(f) for f in up_files]
             combined = (
@@ -750,6 +758,12 @@ def main():
             if not combined.empty:
                 st.session_state.df = combined
                 st.session_state.rak = perform_rak_reconciliation(combined)
+                # Log action
+                st.session_state.audit_logs.append({
+                    "Waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "Aksi": "Ekstrak File",
+                    "Keterangan": f"Berhasil memuat {len(combined)} baris dari {len(up_files)} file."
+                })
 
             if subledger_frames and not combined.empty:
                 combined_sub = pd.concat(subledger_frames, ignore_index=True)
@@ -767,6 +781,25 @@ def main():
         and st.session_state.df is not None
         and not st.session_state.df.empty
     ):
+        df_current = st.session_state.df
+
+        # --- FITUR 1: TRIAL BALANCE CHECK (VALIDASI KESEIMBANGAN) ---
+        if "Debet" in df_current.columns and "Kredit" in df_current.columns:
+            tot_db = df_current["Debet"].apply(to_num).sum()
+            tot_kr = df_current["Kredit"].apply(to_num).sum()
+            diff_bal = abs(tot_db - tot_kr)
+            
+            st.markdown("### ⚖️ Neraca Saldo (Trial Balance Check)")
+            b1, b2, b3 = st.columns(3)
+            b1.metric("Total Debet", rupiah(tot_db))
+            b2.metric("Total Kredit", rupiah(tot_kr))
+            b3.metric("Selisih Debet vs Kredit", rupiah(diff_bal), delta_color="inverse")
+            
+            if diff_bal < 1.0:
+                st.success("✨ **STATUS JURNAL: SEIMBANG (BALANCED)** — Total Debet sama dengan Total Kredit.")
+            else:
+                st.error(f"⚠️ **STATUS JURNAL: TIDAK SEIMBANG** — Terdapat selisih sebesar {rupiah(diff_bal)} antara Debet dan Kredit.")
+
         if st.session_state.get("rak"):
             rak = st.session_state.rak
             st.subheader("① Hasil Rekonsiliasi Antar Kantor (RAK)")
@@ -774,13 +807,21 @@ def main():
             c1.metric("Saldo Akhir Cabang", rupiah(rak["sal_c"]))
             c2.metric("Saldo Akhir Pusat", rupiah(rak["sal_p"]))
             c3.metric("Selisih Pembukuan", rupiah(rak["selisih"]))
-            t1, t2 = st.tabs(["🔴 Selisih & Unmatched", "✅ Matched"])
+            
+            t1, t2, t3 = st.tabs(["🔴 Selisih & Unmatched", "✅ Matched", "📈 Grafik RAK"])
             with t1:
                 st.dataframe(
                     pd.concat([rak["un_c"], rak["un_p"]]), use_container_width=True
                 )
             with t2:
                 st.dataframe(rak["matched"], use_container_width=True)
+            with t3:
+                # --- FITUR 3: GRAFIK VISUALISASI RAK ---
+                chart_data = pd.DataFrame({
+                    "Kategori": ["Cabang", "Pusat"],
+                    "Saldo Akhir": [rak["sal_c"], rak["sal_p"]]
+                })
+                st.bar_chart(chart_data.set_index("Kategori"))
 
         if st.session_state.get("subledger_analysis"):
             st.markdown("---")
@@ -820,6 +861,11 @@ def main():
                 if st.button("➕ Tambah Kolom"):
                     if col_add and col_add not in st.session_state.df.columns:
                         st.session_state.df[col_add] = ""
+                        st.session_state.audit_logs.append({
+                            "Waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "Aksi": "Tambah Kolom",
+                            "Keterangan": f"Menambahkan kolom baru: {col_add}"
+                        })
                         st.rerun()
             with c2:
                 col_del = st.selectbox(
@@ -827,6 +873,11 @@ def main():
                 )
                 if st.button("🗑️ Hapus Kolom"):
                     st.session_state.df = st.session_state.df.drop(columns=[col_del])
+                    st.session_state.audit_logs.append({
+                        "Waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "Aksi": "Hapus Kolom",
+                        "Keterangan": f"Menghapus kolom: {col_del}"
+                    })
                     st.rerun()
             with c3:
                 insert_idx = st.number_input(
@@ -851,12 +902,33 @@ def main():
                     st.session_state.df = pd.concat(
                         [df_top, df_new_row, df_bottom], ignore_index=True
                     )
+                    st.session_state.audit_logs.append({
+                        "Waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "Aksi": "Sisip Baris",
+                        "Keterangan": f"Menyisipkan baris baru setelah indeks {idx_int}"
+                    })
                     st.success(f"Baris berhasil disisipkan setelah indeks {idx_int}!")
                     st.rerun()
 
-        st.session_state.df = st.data_editor(
+        # Data Editor Interaktif
+        edited_df = st.data_editor(
             st.session_state.df, num_rows="dynamic", use_container_width=True
         )
+        if not edited_df.equals(st.session_state.df):
+            st.session_state.df = edited_df
+            st.session_state.audit_logs.append({
+                "Waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Aksi": "Edit Data Tabel",
+                "Keterangan": "Pengguna melakukan perubahan langsung pada sel tabel jurnal."
+            })
+
+        # --- FITUR 2: AUDIT TRAIL / RIWAYAT PERUBAHAN DATA (LOG HISTORY) ---
+        with st.expander("📜 Lihat Audit Trail & Riwayat Perubahan Sesi", expanded=False):
+            if st.session_state.audit_logs:
+                df_logs = pd.DataFrame(st.session_state.audit_logs)
+                st.dataframe(df_logs, use_container_width=True)
+            else:
+                st.info("Belum ada catatan aktivitas perubahan pada sesi ini.")
 
         st.divider()
         e1, e2 = st.columns(2)
