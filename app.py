@@ -122,12 +122,17 @@ def process_uploaded_file(uploaded_file):
         st.error(f"Gagal membaca file {fname}: {e}")
         return pd.DataFrame(columns=STD_COLS)
 
-# ---------- ENGINE RAK & PDF ----------
+# ---------- ENGINE RAK & PDF (REVISED) ----------
 def perform_rak_reconciliation(df_all):
     if "Source_File" not in df_all.columns:
         return None
     files = df_all["Source_File"].unique()
     if len(files) < 2:
+        return None
+    
+    # Hanya jalankan analisis RAK jika ada indikasi dua entitas/kantor berbeda (misal Pusat vs Cabang)
+    files_str = " ".join([str(f).lower() for f in files])
+    if not ("770" in files_str or "pusat" in files_str):
         return None
 
     df_a = df_all[df_all["Source_File"] == files[0]].copy().reset_index(drop=True)
