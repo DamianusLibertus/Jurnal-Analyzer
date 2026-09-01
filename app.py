@@ -4,10 +4,11 @@
 # Application: Aplikasi Analisis Jurnal & Rekonsiliasi
 # ==========================================================
 
-import os
+import streamlit as st
 import datetime
 import pandas as pd
 import numpy as np
+import io
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -17,25 +18,19 @@ from reportlab.platypus import (
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 
-def buat_laporan_rekonsiliasi(gl_filepath, subledger_filepath, output_pdf_path):
-    # ==========================================
-    # 1. BACA DAN BERSIHKAN DATA
-    # ==========================================
-    
-    # Reading GL File (Simp. Harian)
-    df_raw_gl = pd.read_excel(gl_filepath, header=None)
+def proses_dan_buat_pdf(file_gl_obj, file_sub_obj):
+    # Read directly from Streamlit UploadedFile objects
+    df_raw_gl = pd.read_excel(file_gl_obj, header=None)
     df_gl = df_raw_gl.iloc[8:].copy()
     df_gl = df_gl.iloc[:, :7]
     df_gl.columns = ['Tgl_Trans', 'Kode', 'No_Bukti', 'Uraian', 'Debet', 'Kredit', 'Saldo']
     
-    # Tangani No Bukti yang kosong (misal: Bunga Otomatis)
     df_gl['No_Bukti'] = df_gl['No_Bukti'].fillna('AUTO-SYSTEM')
     df_gl['Debet'] = pd.to_numeric(df_gl['Debet'], errors='coerce').fillna(0)
     df_gl['Kredit'] = pd.to_numeric(df_gl['Kredit'], errors='coerce').fillna(0)
     df_gl['Tgl_Trans'] = df_gl['Tgl_Trans'].astype(str)
 
-    # Reading Subledger File (Lap. Transaksi Tabungan)
-    df_raw_sub = pd.read_excel(subledger_filepath, header=None)
+    df_raw_sub = pd.read_excel(file_sub_obj, header=None)
     df_sub = df_raw_sub.iloc[6:].copy()
     df_sub = df_sub.iloc[:, :8]
     df_sub.columns = ['No', 'No_Rekening', 'Nama_Nasabah', 'Tgl_Trans', 'No_Bukti', 'Kode_Trans', 'Setoran', 'Penarikan']
@@ -45,24 +40,17 @@ def buat_laporan_rekonsiliasi(gl_filepath, subledger_filepath, output_pdf_path):
     df_sub['Penarikan'] = pd.to_numeric(df_sub['Penarikan'], errors='coerce').fillna(0)
     df_sub['Tgl_Trans'] = df_sub['Tgl_Trans'].astype(str)
 
-    # ==========================================
-    # 2. PERHITUNGAN AKUNTANSI & REKONSILIASI
-    # ==========================================
-    
-    # Ringkasan Buku Besar (GL COA 2040102)
-    gl_debet = df_gl['Debet'].sum()      # Pengurangan Kewajiban (Penarikan)
-    gl_kredit = df_gl['Kredit'].sum()    # Penambahan Kewajiban (Setoran)
+    # Perhitungan
+    gl_debet = df_gl['Debet'].sum()
+    gl_kredit = df_gl['Kredit'].sum()
     gl_selisih_internal = gl_debet - gl_kredit
 
-    # Ringkasan Subledger Tabungan Nasabah
     sub_setoran = df_sub['Setoran'].sum()
     sub_penarikan = df_sub['Penarikan'].sum()
 
-    # Uji Kesesuaian GL vs Subledger
     selisih_setoran = gl_kredit - sub_setoran
     selisih_penarikan = gl_debet - sub_penarikan
 
-    # Audit Transaksi Pincang per No Bukti di GL
     gl_by_bukti = df_gl[df_gl['No_Bukti'] != 'AUTO-SYSTEM'].groupby('No_Bukti').agg(
         total_debet=('Debet', 'sum'),
         total_kredit=('Kredit', 'sum')
@@ -70,12 +58,10 @@ def buat_laporan_rekonsiliasi(gl_filepath, subledger_filepath, output_pdf_path):
     gl_by_bukti['selisih'] = (gl_by_bukti['total_debet'] - gl_by_bukti['total_kredit']).abs()
     pincang_df = gl_by_bukti[gl_by_bukti['selisih'] > 0.01]
 
-    # ==========================================
-    # 3. GENERATE PDF REPORT
-    # ==========================================
-    
+    # Generate PDF into memory buffer
+    buffer = io.BytesIO()
     doc = SimpleDocTemplate(
-        output_pdf_path,
+        buffer,
         pagesize=A4,
         rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30
     )
@@ -89,13 +75,11 @@ def buat_laporan_rekonsiliasi(gl_filepath, subledger_filepath, output_pdf_path):
 
     elements = []
 
-    # Header PDF (Juga Mencetak Copyright di Laporan PDF)
     elements.append(Paragraph("Aplikasi Analisis Jurnal & Rekonsiliasi", style_title))
     elements.append(Paragraph("Hak Cipta © 2026 Damianus Libertus. Seluruh Hak Cipta Dilindungi.", style_subtitle))
     elements.append(Paragraph(f"Tanggal Cetak: {datetime.datetime.now().strftime('%d-%m-%Y %H:%M')} WIB", style_subtitle))
     elements.append(Spacer(1, 15))
 
-    # Ringkasan Buku Besar
     elements.append(Paragraph("1. Ringkasan Buku Besar / GL (COA 2040102 - Simpanan)", style_h2))
     elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CBD5E0'), spaceAfter=10))
 
@@ -105,7 +89,6 @@ def buat_laporan_rekonsiliasi(gl_filepath, subledger_filepath, output_pdf_path):
         ["Total Kredit (Penambahan/Setoran)", f"{gl_kredit:,.2f}"],
         ["Selisih Mutasi Intern GL (Debet vs Kredit)", f"{gl_selisih_internal:,.2f}"]
     ]
-    
     t_gl = Table(data_gl, colWidths=[300, 200])
     t_gl.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#EDF2F7')),
@@ -116,7 +99,6 @@ def buat_laporan_rekonsiliasi(gl_filepath, subledger_filepath, output_pdf_path):
     elements.append(t_gl)
     elements.append(Spacer(1, 15))
 
-    # Uji Kesesuaian Subledger vs GL
     elements.append(Paragraph("2. Hasil Uji Kesesuaian Subledger Simpanan vs Buku Besar", style_h2))
     elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CBD5E0'), spaceAfter=10))
 
@@ -125,7 +107,6 @@ def buat_laporan_rekonsiliasi(gl_filepath, subledger_filepath, output_pdf_path):
         ["Setoran Tabungan (Kredit GL)", f"{sub_setoran:,.2f}", f"{gl_kredit:,.2f}", f"{selisih_setoran:,.2f}"],
         ["Penarikan Tabungan (Debet GL)", f"{sub_penarikan:,.2f}", f"{gl_debet:,.2f}", f"{selisih_penarikan:,.2f}"]
     ]
-
     t_rekon = Table(data_rekon, colWidths=[180, 110, 110, 100])
     t_rekon.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#EDF2F7')),
@@ -136,7 +117,6 @@ def buat_laporan_rekonsiliasi(gl_filepath, subledger_filepath, output_pdf_path):
     elements.append(t_rekon)
     elements.append(Spacer(1, 10))
 
-    # Catatan Evaluasi
     status_setoran = "SEIMBANG" if abs(selisih_setoran) < 0.01 else f"TIDAK SEIMBANG (Selisih: Rp {selisih_setoran:,.2f})"
     status_penarikan = "SEIMBANG" if abs(selisih_penarikan) < 0.01 else f"TIDAK SEIMBANG (Selisih: Rp {selisih_penarikan:,.2f})"
     
@@ -148,7 +128,6 @@ def buat_laporan_rekonsiliasi(gl_filepath, subledger_filepath, output_pdf_path):
     elements.append(Paragraph(txt_eval, style_normal))
     elements.append(Spacer(1, 15))
 
-    # Detail Jurnal Pincang (Jika ada)
     if len(pincang_df) > 0:
         elements.append(Paragraph("3. Rincian Jurnal Pincang di Buku Besar", style_h2))
         elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CBD5E0'), spaceAfter=10))
@@ -171,17 +150,32 @@ def buat_laporan_rekonsiliasi(gl_filepath, subledger_filepath, output_pdf_path):
         ]))
         elements.append(t_pincang)
 
-    # Build PDF
     doc.build(elements)
-    print(f"Laporan berhasil dibuat di: {output_pdf_path}")
-
+    buffer.seek(0)
+    return buffer
 
 # ==========================================
-# EKSEKUSI PROGRAM
+# INTERFACE STREAMLIT
 # ==========================================
-if __name__ == '__main__':
-    file_gl = 'Simp. Harian 773 Des 2025 ok.xls.xlsx'
-    file_sub = 'Lap. Transaksi tabungan 773 des 2025 Ok.xls.xlsx'
-    file_output = 'Laporan_Analisis_Jurnal_Revisi.pdf'
-    
-    buat_laporan_rekonsiliasi(file_gl, file_sub, file_output)
+st.set_page_config(page_title="Analisis Jurnal & Rekonsiliasi", layout="centered")
+
+st.title("Aplikasi Analisis Jurnal & Rekonsiliasi")
+st.caption("Hak Cipta © 2026 Damianus Libertus. Seluruh Hak Cipta Dilindungi.")
+
+st.subheader("Upload File Excel")
+file_gl = st.file_uploader("Upload File Buku Besar (GL)", type=["xlsx", "xls"])
+file_sub = st.file_uploader("Upload File Subledger Tabungan", type=["xlsx", "xls"])
+
+if file_gl and file_sub:
+    if st.button("Proses & Buat Laporan PDF"):
+        with st.spinner("Memproses rekonsiliasi data..."):
+            pdf_data = proses_dan_buat_pdf(file_gl, file_sub)
+            st.success("Analisis Selesai!")
+            st.download_button(
+                label="Download Laporan PDF",
+                data=pdf_data,
+                file_name="Laporan_Analisis_Jurnal_Revisi.pdf",
+                mime="application/pdf"
+            )
+else:
+    st.info("Silakan upload kedua file Excel di atas untuk memulai analisis.")
