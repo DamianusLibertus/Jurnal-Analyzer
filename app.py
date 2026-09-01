@@ -122,6 +122,28 @@ def process_uploaded_file(uploaded_file):
         st.error(f"Gagal membaca file {fname}: {e}")
         return pd.DataFrame(columns=STD_COLS)
 
+# ---------- ENGINE VALIDASI PER NOMOR BUKTI (KANTOR TUNGGAL) ----------
+def perform_per_bukti_validation(df):
+    if df.empty or "No. Bukti" not in df.columns:
+        return pd.DataFrame()
+    
+    df_val = df.copy()
+    df_val["Debet_num"] = df_val["Debet"].apply(to_num) if "Debet" in df_val.columns else 0.0
+    df_val["Kredit_num"] = df_val["Kredit"].apply(to_num) if "Kredit" in df_val.columns else 0.0
+    df_val["No. Bukti Clean"] = df_val["No. Bukti"].astype(str).str.strip()
+    
+    # Kelompokkan berdasarkan No. Bukti
+    grouped = df_val[df_val["No. Bukti Clean"] != ""].groupby("No. Bukti Clean").agg({
+        "Debet_num": "sum",
+        "Kredit_num": "sum",
+        "Uraian": lambda x: " | ".join(x.astype(str).unique()[:2])
+    }).reset_index()
+    
+    grouped["Selisih"] = grouped["Debet_num"] - grouped["Kredit_num"]
+    # Filter yang tidak seimbang (selisih > 1 rupiah)
+    unbalanced = grouped[abs(grouped["Selisih"]) >= 1.0].copy()
+    return unbalanced
+
 # ---------- ENGINE RAK & PDF (REVISED) ----------
 def perform_rak_reconciliation(df_all):
     if "Source_File" not in df_all.columns:
@@ -130,7 +152,6 @@ def perform_rak_reconciliation(df_all):
     if len(files) < 2:
         return None
     
-    # Hanya jalankan analisis RAK jika ada indikasi dua entitas/kantor berbeda (misal Pusat vs Cabang)
     files_str = " ".join([str(f).lower() for f in files])
     if not ("770" in files_str or "pusat" in files_str):
         return None
@@ -301,7 +322,7 @@ def perform_subledger_vs_gl_analysis(df_subledger, df_gl):
         "df_unmatched_subledger": pd.DataFrame(unmatched_subledger),
     }
 
-def build_pdf_report(df, rak, sub_res=None):
+def build_pdf_report(df, rak, sub_res=None, unbalanced_bukti=None):
     if not REPORTLAB_AVAILABLE:
         return b"Error: Modul reportlab tidak terinstall."
         
@@ -381,6 +402,7 @@ def build_pdf_report(df, rak, sub_res=None):
     elements.append(Paragraph(f"<i>Tanggal Cetak: {datetime.now().strftime('%d-%m-%Y %H:%M WIB')}</i>", ParagraphStyle("Sub2", parent=styles["Normal"], fontSize=8, textColor=colors.grey)))
     elements.append(Spacer(1, 10))
 
+    # Jika mode RAK aktif
     if rak:
         summary_data = [
             [Paragraph("<b>Keterangan</b>", header_style), Paragraph("<b>Nilai</b>", header_style)],
@@ -416,6 +438,44 @@ def build_pdf_report(df, rak, sub_res=None):
 
         elements.append(Paragraph(exp_text, body_style))
         elements.append(Spacer(1, 12))
+    
+    # Jika mode Kantor Tunggal (Single Office)
+    else:
+        tot_db = df["Debet"].sum() if "Debet" in df.columns else 0.0
+        tot_kr = df["Kredit"].sum() if "Kredit" in df.columns else 0.0
+        diff_bal = abs(tot_db - tot_kr)
+
+        summary_data = [
+            [Paragraph("<b>Parameter Neraca Saldo Internal</b>", header_style), Paragraph("<b>Nilai</b>", header_style)],
+            [Paragraph("Total Debet", cell_style), Paragraph(rupiah(tot_db), cell_style)],
+            [Paragraph("Total Kredit", cell_style), Paragraph(rupiah(tot_kr), cell_style)],
+            [Paragraph("Selisih Debet vs Kredit", cell_style), Paragraph(rupiah(diff_bal), cell_style)],
+        ]
+        t_sum = Table(summary_data, colWidths=[140 * mm, 126 * mm])
+        t_sum.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), navy),
+            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        elements.append(t_sum)
+        elements.append(Spacer(1, 10))
+
+        elements.append(Paragraph("<b>Analisis Pembukuan Kantor Tunggal</b>", h2))
+        if diff_bal < 1.0:
+            single_exp = "• <b>Status Trial Balance:</b> SEIMBANG (BALANCED). Total seluruh Debet sama persis dengan total Kredit.<br/>"
+        else:
+            single_exp = f"• <b>Status Trial Balance:</b> TIDAK SEIMBANG. Ditemukan selisih global sebesar <b>{rupiah(diff_bal)}</b>.<br/>"
+        
+        if unbalanced_bukti is not None and not unbalanced_bukti.empty:
+            single_exp += f"• <b>Temuan Jurnal Pincang:</b> Terdapat <b>{len(unbalanced_bukti)}</b> nomor bukti transaksi yang total debet dan kredit per buktinya tidak seimbang.<br/>"
+        else:
+            single_exp += "• <b>Validasi Per No. Bukti:</b> Seluruh transaksi per nomor bukti terverifikasi seimbang.<br/>"
+        
+        elements.append(Paragraph(single_exp, body_style))
+        elements.append(Spacer(1, 12))
 
     if sub_res:
         selisih_set = sub_res["selisih_setoran"]
@@ -441,11 +501,8 @@ def build_pdf_report(df, rak, sub_res=None):
 
         if abs(selisih_set) < 1.0:
             sub_exp = "• <b>Analisis Kesesuaian Setoran & Penarikan:</b> Seluruh transaksi setoran dan penarikan pada subledger nasabah telah terverifikasi sinkron terhadap Buku Besar (General Ledger).<br/>"
-            sub_exp += "• <b>Status Posting:</b> Berdasarkan uji petik nomor bukti, seluruh transaksi tercatat aktif dan sudah ter-posting secara konsisten."
         else:
             sub_exp = f"• <b>Analisis Kesesuaian Setoran & Penarikan:</b> Ditemukan selisih setoran sebesar <b>{rupiah(selisih_set)}</b> antara Subledger Nasabah dan Buku Besar (GL).<br/>"
-            sub_exp += f"• <b>Indikasi Temuan Audit:</b> Terdapat transaksi pada Subledger/GL yang belum tercatat atau belum ter-posting sempurna (ditandai baris merah pada rincian jurnal di bawah).<br/>"
-            sub_exp += "• <b>Rekomendasi Tindak Lanjut:</b> Lakukan penelusuran slip transaksi harian untuk mencocokkan kembali entry yang gantung."
 
         elements.append(Paragraph(sub_exp, body_style))
         elements.append(Spacer(1, 12))
@@ -548,6 +605,7 @@ def main():
             if not combined.empty:
                 st.session_state.df = combined
                 st.session_state.rak = perform_rak_reconciliation(combined)
+                st.session_state.unbalanced_bukti = perform_per_bukti_validation(combined)
                 st.session_state.audit_logs.append({
                     "Waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "Aksi": "Ekstrak File",
@@ -584,6 +642,17 @@ def main():
             else:
                 st.error(f"⚠️ **STATUS JURNAL: TIDAK SEIMBANG** — Terdapat selisih sebesar {rupiah(diff_bal)} antara Debet dan Kredit.")
 
+        # Tampilkan Validasi Per Nomor Bukti (Khusus Mode Kantor Tunggal)
+        if not st.session_state.get("rak") and "unbalanced_bukti" in st.session_state:
+            unb_df = st.session_state.unbalanced_bukti
+            st.markdown("### 🔍 Validasi Keseimbangan per Nomor Bukti")
+            if not unb_df.empty:
+                st.warning(f"Ditemukan **{len(unb_df)} nomor bukti** dengan total Debet dan Kredit yang tidak seimbang:")
+                st.dataframe(unb_df, use_container_width=True)
+            else:
+                st.success("✨ **Semua No. Bukti Seimbang** — Setiap transaksi per nomor bukti memiliki Debet dan Kredit yang cocok.")
+
+        # Tampilkan RAK Jika Terdeteksi Antar Kantor
         if st.session_state.get("rak"):
             rak = st.session_state.rak
             st.subheader("① Hasil Rekonsiliasi Antar Kantor (RAK)")
@@ -676,6 +745,7 @@ def main():
         )
         if not edited_df.equals(st.session_state.df):
             st.session_state.df = edited_df
+            st.session_state.unbalanced_bukti = perform_per_bukti_validation(edited_df)
             st.session_state.audit_logs.append({
                 "Waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "Aksi": "Edit Data Tabel",
@@ -703,11 +773,12 @@ def main():
                 df_to_export,
                 st.session_state.get("rak"),
                 st.session_state.get("subledger_analysis"),
+                st.session_state.get("unbalanced_bukti"),
             )
             e1.download_button(
                 "🖨️ Cetak PDF",
                 pdf_data,
-                f"Laporan_Analisis_RAK_{datetime.now():%Y%m%d_%H%M}.pdf",
+                f"Laporan_Analisis_Jurnal_{datetime.now():%Y%m%d_%H%M}.pdf",
                 "application/pdf",
                 use_container_width=True,
             )
@@ -720,7 +791,7 @@ def main():
         e2.download_button(
             "📊 Download Excel",
             buf.getvalue(),
-            f"Hasil_Analisis_RAK_{datetime.now():%Y%m%d_%H%M}.xlsx",
+            f"Hasil_Analisis_Jurnal_{datetime.now():%Y%m%d_%H%M}.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
