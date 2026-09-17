@@ -20,7 +20,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     # ---------------------------------------------------------
-    # 1. PARSING & PEMBERSIHAN DATASET (BERDASARKAN MODE)
+    # 1. PARSING & PEMBERSIHAN DATASET
     # ---------------------------------------------------------
     df_raw_1 = pd.read_excel(file_1_obj, header=None)
     df_1 = df_raw_1.copy().iloc[:, :7]
@@ -33,13 +33,11 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     df_raw_2 = pd.read_excel(file_2_obj, header=None)
     
     if mode_analisis == "Buku Besar vs Subledger":
-        # Mode Internal Cabang: Membaca struktur subledger
         df_2 = df_raw_2.iloc[6:].copy().iloc[:, :8]
         df_2.columns = ['No', 'No_Rekening', 'Nama_Nasabah', 'Tgl_Trans', 'No_Bukti', 'Kode_Trans', 'Kredit_2', 'Debet_2']
         df_2['Debet_2'] = pd.to_numeric(df_2['Debet_2'], errors='coerce').fillna(0)
         df_2['Kredit_2'] = pd.to_numeric(df_2['Kredit_2'], errors='coerce').fillna(0)
     else:
-        # Mode Rekonsiliasi Antar Kantor (RAK): Buku Besar vs Buku Besar
         num_cols = min(df_raw_2.shape[1], 7)
         df_2 = df_raw_2.iloc[9:].copy().iloc[:, :num_cols]
         
@@ -63,13 +61,15 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
             (df_2['No_Rekening'].astype(str) != 'No Rekening')
         ].copy()
     else:
-        f2_valid = df_2[df_2['No_Bukti'].notna() & (df_2['Bukti_Clean'] != 'NAN')].copy()
+        # Khusus Mode RAK: Filter murni transaksi Jurnal Umum (JU) / Transfer Antar Kantor
+        # agar tidak tercampur dengan transaksi tabungan reguler harian (TAB)
+        f1_valid = f1_valid[f1_valid['Kode'].astype(str).str.upper() == 'JU'].copy()
+        f2_valid = f2_valid[f2_valid['Kode'].astype(str).str.upper() == 'JU'].copy()
 
     # ---------------------------------------------------------
-    # 2. ALGORITMA AUDIT TERPISAH BERDASARKAN MODE
+    # 2. ALGORITMA AUDIT & PENCABANGAN MODE
     # ---------------------------------------------------------
     if mode_analisis == "Buku Besar vs Subledger":
-        # Logika Ketat Internal 1 Cabang
         set_f1 = set(f1_valid['Bukti_Clean'])
         set_f2 = set(f2_valid['Bukti_Clean'])
         gantung_di_f1 = f1_valid[~f1_valid['Bukti_Clean'].isin(set_f2)]
@@ -86,7 +86,6 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         f1_by_bukti['selisih'] = (f1_by_bukti['total_debet'] - f1_by_bukti['total_kredit']).abs()
         pincang_f1 = f1_by_bukti[f1_by_bukti['selisih'] > 0.01]
     else:
-        # Logika Transparan Rekonsiliasi Antar Kantor (RAK)
         set_f1_bukti = set(f1_valid['Bukti_Clean'])
         set_f2_bukti = set(f2_valid['Bukti_Clean'])
         
@@ -116,11 +115,11 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
             
         pincang_f1 = pd.DataFrame()
 
-    # Total Mutasi Keseluruhan
-    f1_tot_debet = df_1['Debet'].sum()
-    f1_tot_kredit = df_1['Kredit'].sum()
-    f2_tot_kredit = df_2['Kredit_2'].sum() if 'Kredit_2' in df_2.columns else 0.0
-    f2_tot_debet = df_2['Debet_2'].sum() if 'Debet_2' in df_2.columns else 0.0
+    # Total Mutasi Keseluruhan (Berdasarkan Data Terfilter / Utuh)
+    f1_tot_debet = f1_valid['Debet'].sum() if mode_analisis != "Buku Besar vs Subledger" else df_1['Debet'].sum()
+    f1_tot_kredit = f1_valid['Kredit'].sum() if mode_analisis != "Buku Besar vs Subledger" else df_1['Kredit'].sum()
+    f2_tot_kredit = f2_valid['Kredit_2'].sum() if ('Kredit_2' in f2_valid.columns and mode_analisis != "Buku Besar vs Subledger") else (df_2['Kredit_2'].sum() if 'Kredit_2' in df_2.columns else 0.0)
+    f2_tot_debet = f2_valid['Debet_2'].sum() if ('Debet_2' in f2_valid.columns and mode_analisis != "Buku Besar vs Subledger") else (df_2['Debet_2'].sum() if 'Debet_2' in df_2.columns else 0.0)
 
     selisih_kredit = f1_tot_kredit - f2_tot_kredit
     selisih_debet = f1_tot_debet - f2_tot_debet
@@ -143,14 +142,12 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
 
     elements = []
 
-    # Header PDF
     elements.append(Paragraph("LAPORAN HASIL AUDIT REKONSILIASI & ANALISIS JURNAL", style_title))
     elements.append(Paragraph(f"Mode Analisis: {mode_analisis}", style_sub))
     elements.append(Paragraph("Hak Cipta © 2026 Damianus Libertus. Seluruh Hak Cipta Dilindungi.", style_sub))
     elements.append(Paragraph(f"Tanggal Audit: {datetime.datetime.now().strftime('%d-%m-%Y %H:%M')} WIB", style_sub))
     elements.append(Spacer(1, 10))
 
-    # Ringkasan Eksekutif
     elements.append(Paragraph("1. Ringkasan Eksekutif & Indikator Temuan Audit", style_h2))
     elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CBD5E0'), spaceAfter=8))
 
@@ -174,7 +171,6 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     elements.append(t_sum)
     elements.append(Spacer(1, 12))
 
-    # Rekonsiliasi Nominal Mutasi
     elements.append(Paragraph("2. Rekonsiliasi Total Nominal Mutasi Antar Kantor / Dokumen", style_h2))
     elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CBD5E0'), spaceAfter=8))
 
@@ -193,7 +189,6 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     elements.append(t_rek)
     elements.append(Spacer(1, 12))
 
-    # Detail Transaksi Gantung
     if len(gantung_di_f2) > 0:
         elements.append(Paragraph("3. Rincian Transaksi Gantung / Belum Match", style_h2))
         elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CBD5E0'), spaceAfter=8))
@@ -241,7 +236,6 @@ st.set_page_config(page_title="Audit Rekonsiliasi & Analisis Jurnal", layout="wi
 st.title("Aplikasi Analisis Jurnal & Rekonsiliasi Audit")
 st.caption("Hak Cipta © 2026 Damianus Libertus. Seluruh Hak Cipta Dilindungi.")
 
-# Pilihan Mode Analisis
 mode_analisis = st.radio(
     "Pilih Mode Analisis & Pencocokan Transaksi:",
     ["Buku Besar vs Subledger", "Buku Besar vs Buku Besar Antar Kantor / Cabang"],
@@ -265,7 +259,6 @@ if file_1 and file_2:
             
             st.success("Audit & Rekonsiliasi Berhasil Dilaksanakan!")
             
-            # Dashboard Metric Interaktif
             m1, m2, m3, m4, m5 = st.columns(5)
             m1.metric("Gantung (Cabang 2)", f"{summary['gantung_f2_cnt']} Tx")
             m2.metric("Gantung (Cabang 1)", f"{summary['gantung_f1_cnt']} Tx")
