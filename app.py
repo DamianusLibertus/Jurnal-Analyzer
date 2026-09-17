@@ -39,15 +39,20 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         df_2.columns = ['No', 'No_Rekening', 'Nama_Nasabah', 'Tgl_Trans', 'No_Bukti', 'Kode_Trans', 'Kredit_2', 'Debet_2']
         df_2['Debet_2'] = pd.to_numeric(df_2['Debet_2'], errors='coerce').fillna(0)
         df_2['Kredit_2'] = pd.to_numeric(df_2['Kredit_2'], errors='coerce').fillna(0)
+        df_2['No_Rekening'] = df_2['No_Rekening']
+        df_2['Nama_Nasabah'] = df_2['Nama_Nasabah']
     else:
         # Mode Rekonsiliasi Antar Kantor / Cabang (Buku Besar vs Buku Besar)
-        df_2 = df_raw_2.iloc[8:].copy().iloc[:, :7]
-        df_2.columns = ['Tgl_Trans', 'Kode', 'No_Bukti', 'Uraian', 'Debet', 'Kredit', 'Saldo']
-        # Disamakan ke format pembanding 2 (Debet_2, Kredit_2)
-        df_2['Debet_2'] = pd.to_numeric(df_2['Debet'], errors='coerce').fillna(0)
-        df_2['Kredit_2'] = pd.to_numeric(df_2['Kredit'], errors='coerce').fillna(0)
-        df_2['No_Rekening'] = df_2['Kode']
-        df_2['Nama_Nasabah'] = df_2['Uraian']
+        num_cols = min(df_raw_2.shape[1], 7)
+        df_2 = df_raw_2.iloc[8:].copy().iloc[:, :num_cols]
+        
+        cols_gl = ['Tgl_Trans', 'Kode', 'No_Bukti', 'Uraian', 'Debet', 'Kredit', 'Saldo'][:num_cols]
+        df_2.columns = cols_gl
+        
+        df_2['Debet_2'] = pd.to_numeric(df_2['Debet'], errors='coerce').fillna(0) if 'Debet' in df_2.columns else 0.0
+        df_2['Kredit_2'] = pd.to_numeric(df_2['Kredit'], errors='coerce').fillna(0) if 'Kredit' in df_2.columns else 0.0
+        df_2['No_Rekening'] = df_2['Kode'] if 'Kode' in df_2.columns else ''
+        df_2['Nama_Nasabah'] = df_2['Uraian'] if 'Uraian' in df_2.columns else ''
 
     df_2['Tgl_Clean'] = df_2['Tgl_Trans'].astype(str).str.strip()
     df_2['Bukti_Clean'] = df_2['No_Bukti'].astype(str).str.strip().str.upper()
@@ -84,7 +89,7 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     # C. Beda Tanggal Catat
     beda_tanggal = merged[merged['Tgl_Clean_F1'] != merged['Tgl_Clean_F2']]
 
-    # D. Beda Nominal Rupiah (Aman menggunakan Kredit vs Kredit_2 & Debet vs Debet_2)
+    # D. Beda Nominal Rupiah
     beda_nominal = merged[
         (merged['Kredit'] != merged['Kredit_2']) | 
         (merged['Debet'] != merged['Debet_2'])
