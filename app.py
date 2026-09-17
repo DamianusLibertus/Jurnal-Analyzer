@@ -76,7 +76,6 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         gantung_di_f1 = f1_valid[~f1_valid['Bukti_Clean'].isin(set_f2_bukti)]
         gantung_di_f2 = f2_valid[~f2_valid['Bukti_Clean'].isin(set_f1_bukti)]
         
-        # Perbaikan parameter suffixes di sini (pastikan tepat 2 nilai: '_F1', '_F2')
         merged = pd.merge(
             f1_valid, f2_valid,
             on='Bukti_Clean',
@@ -84,11 +83,21 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         )
         
         beda_tanggal = merged[merged['Tgl_Clean_F1'] != merged['Tgl_Clean_F2']] if 'Tgl_Clean_F1' in merged.columns else pd.DataFrame()
-        beda_nominal = merged[
-            (merged['Kredit'] != merged['Kredit_2']) | 
-            (merged['Debet'] != merged['Debet_2'])
-        ] if 'Kredit_2' in merged.columns else pd.DataFrame()
         
+        # Pengaman pengecekan kolom nominal hasil merge
+        col_k1 = 'Kredit_F1' if 'Kredit_F1' in merged.columns else 'Kredit'
+        col_k2 = 'Kredit_2_F2' if 'Kredit_2_F2' in merged.columns else ('Kredit_2' if 'Kredit_2' in merged.columns else 'Kredit_F2')
+        col_d1 = 'Debet_F1' if 'Debet_F1' in merged.columns else 'Debet'
+        col_d2 = 'Debet_2_F2' if 'Debet_2_F2' in merged.columns else ('Debet_2' if 'Debet_2' in merged.columns else 'Debet_F2')
+
+        if col_k1 in merged.columns and col_k2 in merged.columns and col_d1 in merged.columns and col_d2 in merged.columns:
+            beda_nominal = merged[
+                (merged[col_k1] != merged[col_k2]) | 
+                (merged[col_d1] != merged[col_d2])
+            ]
+        else:
+            beda_nominal = pd.DataFrame()
+            
         pincang_f1 = pd.DataFrame()
     else:
         set_f1 = set(f1_valid['Bukti_Clean'])
