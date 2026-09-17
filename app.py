@@ -39,8 +39,6 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         df_2.columns = ['No', 'No_Rekening', 'Nama_Nasabah', 'Tgl_Trans', 'No_Bukti', 'Kode_Trans', 'Kredit_2', 'Debet_2']
         df_2['Debet_2'] = pd.to_numeric(df_2['Debet_2'], errors='coerce').fillna(0)
         df_2['Kredit_2'] = pd.to_numeric(df_2['Kredit_2'], errors='coerce').fillna(0)
-        df_2['No_Rekening'] = df_2['No_Rekening']
-        df_2['Nama_Nasabah'] = df_2['Nama_Nasabah']
     else:
         # Mode Rekonsiliasi Antar Kantor / Cabang (Buku Besar vs Buku Besar)
         num_cols = min(df_raw_2.shape[1], 7)
@@ -89,10 +87,15 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     # C. Beda Tanggal Catat
     beda_tanggal = merged[merged['Tgl_Clean_F1'] != merged['Tgl_Clean_F2']]
 
-    # D. Beda Nominal Rupiah
+    # D. Beda Nominal Rupiah (Menggunakan kolom hasil merge _F1 dan _2)
+    col_k1 = 'Kredit_F1' if 'Kredit_F1' in merged.columns else 'Kredit'
+    col_k2 = 'Kredit_2_F2' if 'Kredit_2_F2' in merged.columns else ('Kredit_2' if 'Kredit_2' in merged.columns else 'Kredit_F2')
+    col_d1 = 'Debet_F1' if 'Debet_F1' in merged.columns else 'Debet'
+    col_d2 = 'Debet_2_F2' if 'Debet_2_F2' in merged.columns else ('Debet_2' if 'Debet_2' in merged.columns else 'Debet_F2')
+
     beda_nominal = merged[
-        (merged['Kredit'] != merged['Kredit_2']) | 
-        (merged['Debet'] != merged['Debet_2'])
+        (merged[col_k1] != merged[col_k2]) | 
+        (merged[col_d1] != merged[col_d2])
     ]
 
     # E. Jurnal Pincang di File Pembanding 1
