@@ -33,11 +33,13 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     df_raw_2 = pd.read_excel(file_2_obj, header=None)
     
     if mode_analisis == "Buku Besar vs Subledger":
+        # Mode Internal Cabang: Membaca struktur subledger
         df_2 = df_raw_2.iloc[6:].copy().iloc[:, :8]
         df_2.columns = ['No', 'No_Rekening', 'Nama_Nasabah', 'Tgl_Trans', 'No_Bukti', 'Kode_Trans', 'Kredit_2', 'Debet_2']
         df_2['Debet_2'] = pd.to_numeric(df_2['Debet_2'], errors='coerce').fillna(0)
         df_2['Kredit_2'] = pd.to_numeric(df_2['Kredit_2'], errors='coerce').fillna(0)
     else:
+        # Mode Rekonsiliasi Antar Kantor (RAK): Buku Besar vs Buku Besar
         num_cols = min(df_raw_2.shape[1], 7)
         df_2 = df_raw_2.iloc[9:].copy().iloc[:, :num_cols]
         
@@ -64,9 +66,27 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         f2_valid = df_2[df_2['No_Bukti'].notna() & (df_2['Bukti_Clean'] != 'NAN')].copy()
 
     # ---------------------------------------------------------
-    # 2. ALGORITMA AUDIT & PENGAMAN KOLOM DINAMIS
+    # 2. ALGORITMA AUDIT TERPISAH BERDASARKAN MODE
     # ---------------------------------------------------------
-    if mode_analisis != "Buku Besar vs Subledger":
+    if mode_analisis == "Buku Besar vs Subledger":
+        # Logika Ketat Internal 1 Cabang
+        set_f1 = set(f1_valid['Bukti_Clean'])
+        set_f2 = set(f2_valid['Bukti_Clean'])
+        gantung_di_f1 = f1_valid[~f1_valid['Bukti_Clean'].isin(set_f2)]
+        gantung_di_f2 = f2_valid[~f2_valid['Bukti_Clean'].isin(set_f1)]
+        
+        merged = pd.merge(f1_valid, f2_valid, on='Bukti_Clean', suffixes=('_F1', '_F2'))
+        beda_tanggal = merged[merged['Tgl_Clean_F1'] != merged['Tgl_Clean_F2']] if 'Tgl_Clean_F1' in merged.columns else pd.DataFrame()
+        beda_nominal = merged[(merged['Kredit'] != merged['Kredit_2']) | (merged['Debet'] != merged['Debet_2'])] if 'Kredit_2' in merged.columns else pd.DataFrame()
+        
+        f1_by_bukti = f1_valid.groupby('Bukti_Clean').agg(
+            total_debet=('Debet', 'sum'),
+            total_kredit=('Kredit', 'sum')
+        )
+        f1_by_bukti['selisih'] = (f1_by_bukti['total_debet'] - f1_by_bukti['total_kredit']).abs()
+        pincang_f1 = f1_by_bukti[f1_by_bukti['selisih'] > 0.01]
+    else:
+        # Logika Transparan Rekonsiliasi Antar Kantor (RAK)
         set_f1_bukti = set(f1_valid['Bukti_Clean'])
         set_f2_bukti = set(f2_valid['Bukti_Clean'])
         
@@ -81,7 +101,6 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         
         beda_tanggal = merged[merged['Tgl_Clean_F1'] != merged['Tgl_Clean_F2']] if 'Tgl_Clean_F1' in merged.columns else pd.DataFrame()
         
-        # Deteksi nama kolom secara otomatis setelah merge (Aman dari KeyError)
         col_k1 = next((c for c in ['Kredit_F1', 'Kredit_x', 'Kredit'] if c in merged.columns), None)
         col_k2 = next((c for c in ['Kredit_2_F2', 'Kredit_2', 'Kredit_y', 'Kredit_F2'] if c in merged.columns), None)
         col_d1 = next((c for c in ['Debet_F1', 'Debet_x', 'Debet'] if c in merged.columns), None)
@@ -96,21 +115,6 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
             beda_nominal = pd.DataFrame()
             
         pincang_f1 = pd.DataFrame()
-    else:
-        set_f1 = set(f1_valid['Bukti_Clean'])
-        set_f2 = set(f2_valid['Bukti_Clean'])
-        gantung_di_f1 = f1_valid[~f1_valid['Bukti_Clean'].isin(set_f2)]
-        gantung_di_f2 = f2_valid[~f2_valid['Bukti_Clean'].isin(set_f1)]
-        merged = pd.merge(f1_valid, f2_valid, on='Bukti_Clean', suffixes=('_F1', '_F2'))
-        beda_tanggal = merged[merged['Tgl_Clean_F1'] != merged['Tgl_Clean_F2']]
-        beda_nominal = merged[(merged['Kredit'] != merged['Kredit_2']) | (merged['Debet'] != merged['Debet_2'])]
-        
-        f1_by_bukti = f1_valid.groupby('Bukti_Clean').agg(
-            total_debet=('Debet', 'sum'),
-            total_kredit=('Kredit', 'sum')
-        )
-        f1_by_bukti['selisih'] = (f1_by_bukti['total_debet'] - f1_by_bukti['total_kredit']).abs()
-        pincang_f1 = f1_by_bukti[f1_by_bukti['selisih'] > 0.01]
 
     # Total Mutasi Keseluruhan
     f1_tot_debet = df_1['Debet'].sum()
