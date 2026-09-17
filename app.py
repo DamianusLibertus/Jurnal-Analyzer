@@ -61,10 +61,11 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
             (df_2['No_Rekening'].astype(str) != 'No Rekening')
         ].copy()
     else:
-        # Khusus Mode RAK: Filter murni transaksi Jurnal Umum (JU) / Transfer Antar Kantor
-        # agar tidak tercampur dengan transaksi tabungan reguler harian (TAB)
+        f2_base = df_2[df_2['No_Bukti'].notna() & (df_2['Bukti_Clean'] != 'NAN')].copy()
+        # Filter khusus RAK untuk file 2
+        f2_valid = f2_base[f2_base['Kode'].astype(str).str.upper() == 'JU'].copy()
+        # Filter khusus RAK untuk file 1 juga
         f1_valid = f1_valid[f1_valid['Kode'].astype(str).str.upper() == 'JU'].copy()
-        f2_valid = f2_valid[f2_valid['Kode'].astype(str).str.upper() == 'JU'].copy()
 
     # ---------------------------------------------------------
     # 2. ALGORITMA AUDIT & PENCABANGAN MODE
@@ -115,7 +116,7 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
             
         pincang_f1 = pd.DataFrame()
 
-    # Total Mutasi Keseluruhan (Berdasarkan Data Terfilter / Utuh)
+    # Total Mutasi Keseluruhan
     f1_tot_debet = f1_valid['Debet'].sum() if mode_analisis != "Buku Besar vs Subledger" else df_1['Debet'].sum()
     f1_tot_kredit = f1_valid['Kredit'].sum() if mode_analisis != "Buku Besar vs Subledger" else df_1['Kredit'].sum()
     f2_tot_kredit = f2_valid['Kredit_2'].sum() if ('Kredit_2' in f2_valid.columns and mode_analisis != "Buku Besar vs Subledger") else (df_2['Kredit_2'].sum() if 'Kredit_2' in df_2.columns else 0.0)
