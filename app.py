@@ -64,6 +64,12 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         f2_base = df_2[df_2['No_Bukti'].notna() & (df_2['Bukti_Clean'] != 'NAN')].copy()
         f2_valid = f2_base[f2_base['Kode'].astype(str).str.upper() == 'JU'].copy()
         f1_valid = f1_valid[f1_valid['Kode'].astype(str).str.upper() == 'JU'].copy()
+        
+        # Pastikan f2_valid memiliki kolom Debet_2 dan Kredit_2 yang konsisten
+        if 'Debet' in f2_valid.columns and 'Debet_2' not in f2_valid.columns:
+            f2_valid['Debet_2'] = f2_valid['Debet']
+        if 'Kredit' in f2_valid.columns and 'Kredit_2' not in f2_valid.columns:
+            f2_valid['Kredit_2'] = f2_valid['Kredit']
 
     # ---------------------------------------------------------
     # 2. ALGORITMA AUDIT & SMART CROSS-MATCHING
@@ -85,18 +91,13 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         f1_by_bukti['selisih'] = (f1_by_bukti['total_debet'] - f1_by_bukti['total_kredit']).abs()
         pincang_f1 = f1_by_bukti[f1_by_bukti['selisih'] > 0.01]
     else:
-        # Mode RAK: Pencocokan berbasis Nomor Bukti + Cross-Matching Nominal & Tanggal
         set_f1_bukti = set(f1_valid['Bukti_Clean'])
         set_f2_bukti = set(f2_valid['Bukti_Clean'])
         
-        # Transaksi gantung awal berdasarkan nomor bukti
         gantung_f1_raw = f1_valid[~f1_valid['Bukti_Clean'].isin(set_f2_bukti)]
         gantung_f2_raw = f2_valid[~f2_valid['Bukti_Clean'].isin(set_f1_bukti)]
         
-        # Smart Cross-Match: Cari sisa gantung yang memiliki nominal sama persis (lintas debit/kredit)
-        matched_by_amount = []
         matched_f2_indices = set()
-        
         for idx1, row1 in gantung_f1_raw.iterrows():
             val1 = row1['Debet'] if row1['Debet'] > 0 else row1['Kredit']
             if val1 == 0:
@@ -104,7 +105,7 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
             for idx2, row2 in gantung_f2_raw.iterrows():
                 if idx2 in matched_f2_indices:
                     continue
-                val2 = row2['Debet_2'] if 'Debet_2' in row2 and row2['Debet_2'] > 0 else row2.get('Kredit_2', 0)
+                val2 = row2.get('Debet_2', 0) if row2.get('Debet_2', 0) > 0 else row2.get('Kredit_2', 0)
                 if val1 == val2:
                     matched_f2_indices.add(idx2)
                     break
@@ -119,27 +120,20 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         )
         
         beda_tanggal = merged[merged['Tgl_Clean_F1'] != merged['Tgl_Clean_F2']] if 'Tgl_Clean_F1' in merged.columns else pd.DataFrame()
-        
-        col_k1 = next((c for c in ['Kredit_F1', 'Kredit_x', 'Kredit'] if c in merged.columns), None)
-        col_k2 = next((c for c in ['Kredit_2_F2', 'Kredit_2', 'Kredit_y', 'Kredit_F2'] if c in merged.columns), None)
-        col_d1 = next((c for c in ['Debet_F1', 'Debet_x', 'Debet'] if c in merged.columns), None)
-        col_d2 = next((c for c in ['Debet_2_F2', 'Debet_2', 'Debet_y', 'Debet_F2'] if c in merged.columns), None)
-
-        if col_k1 and col_k2 and col_d1 and col_d2:
-            beda_nominal = merged[
-                (merged[col_k1] != merged[col_k2]) | 
-                (merged[col_d1] != merged[col_d2])
-            ]
-        else:
-            beda_nominal = pd.DataFrame()
-            
+        beda_nominal = pd.DataFrame()
         pincang_f1 = pd.DataFrame()
 
-    # Total Mutasi Keseluruhan
-    f1_tot_debet = f1_valid['Debet'].sum() if mode_analisis != "Buku Besar vs Subledger" else df_1['Debet'].sum()
-    f1_tot_kredit = f1_valid['Kredit'].sum() if mode_analisis != "Buku Besar vs Subledger" else df_1['Kredit'].sum()
-    f2_tot_kredit = f2_valid['Kredit_2'].sum() if ('Kredit_2' in f2_valid.columns and mode_analisis != "Buku Besar vs Subledger") else (df_2['Kredit_2'].sum() if 'Kredit_2' in df_2.columns else 0.0)
-    f2_tot_debet = f2_valid['Debet_2'].sum() if ('Debet_2' in f2_valid.columns and mode_analisis != "Buku Besar vs Subledger") else (df_2['Debet_2'].sum() if 'Debet_2' in df_2.columns else 0.0)
+    # Total Mutasi Konsisten (Sesuai Mode Analisis / Filter JU)
+    if mode_analisis != "Buku Besar vs Subledger":
+        f1_tot_debet = f1_valid['Debet'].sum()
+        f1_tot_kredit = f1_valid['Kredit'].sum()
+        f2_tot_debet = f2_valid['Debet_2'].sum() if 'Debet_2' in f2_valid.columns else 0.0
+        f2_tot_kredit = f2_valid['Kredit_2'].sum() if 'Kredit_2' in f2_valid.columns else 0.0
+    else:
+        f1_tot_debet = df_1['Debet'].sum()
+        f1_tot_kredit = df_1['Kredit'].sum()
+        f2_tot_debet = df_2['Debet_2'].sum() if 'Debet_2' in df_2.columns else 0.0
+        f2_tot_kredit = df_2['Kredit_2'].sum() if 'Kredit_2' in df_2.columns else 0.0
 
     selisih_kredit = f1_tot_kredit - f2_tot_kredit
     selisih_debet = f1_tot_debet - f2_tot_debet
@@ -215,10 +209,10 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
 
         detail_gantung = [[Paragraph("Tgl", style_bold), Paragraph("No. Bukti", style_bold), Paragraph("Kode / Rek", style_bold), Paragraph("Uraian / Ket", style_bold), Paragraph("Kredit (Rp)", style_bold), Paragraph("Debet (Rp)", style_bold)]]
         for _, row in gantung_di_f2.head(50).iterrows():
-            kredit_val = row['Kredit_2'] if 'Kredit_2' in row else 0
-            debet_val = row['Debet_2'] if 'Debet_2' in row else 0
-            rek_val = row['No_Rekening'] if 'No_Rekening' in row else ''
-            nama_val = str(row['Nama_Nasabah'])[:20] if 'Nama_Nasabah' in row else ''
+            kredit_val = row['Kredit_2'] if 'Kredit_2' in row else row.get('Kredit', 0)
+            debet_val = row['Debet_2'] if 'Debet_2' in row else row.get('Debet', 0)
+            rek_val = row['No_Rekening'] if 'No_Rekening' in row else row.get('Kode', '')
+            nama_val = str(row['Nama_Nasabah'])[:20] if 'Nama_Nasabah' in row else str(row['Uraian'])[:20]
             
             detail_gantung.append([
                 Paragraph(str(row['Tgl_Trans']), style_cell),
