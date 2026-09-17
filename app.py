@@ -62,13 +62,11 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         ].copy()
     else:
         f2_base = df_2[df_2['No_Bukti'].notna() & (df_2['Bukti_Clean'] != 'NAN')].copy()
-        # Filter khusus RAK untuk file 2
         f2_valid = f2_base[f2_base['Kode'].astype(str).str.upper() == 'JU'].copy()
-        # Filter khusus RAK untuk file 1 juga
         f1_valid = f1_valid[f1_valid['Kode'].astype(str).str.upper() == 'JU'].copy()
 
     # ---------------------------------------------------------
-    # 2. ALGORITMA AUDIT & PENCABANGAN MODE
+    # 2. ALGORITMA AUDIT & SMART CROSS-MATCHING
     # ---------------------------------------------------------
     if mode_analisis == "Buku Besar vs Subledger":
         set_f1 = set(f1_valid['Bukti_Clean'])
@@ -87,12 +85,33 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         f1_by_bukti['selisih'] = (f1_by_bukti['total_debet'] - f1_by_bukti['total_kredit']).abs()
         pincang_f1 = f1_by_bukti[f1_by_bukti['selisih'] > 0.01]
     else:
+        # Mode RAK: Pencocokan berbasis Nomor Bukti + Cross-Matching Nominal & Tanggal
         set_f1_bukti = set(f1_valid['Bukti_Clean'])
         set_f2_bukti = set(f2_valid['Bukti_Clean'])
         
-        gantung_di_f1 = f1_valid[~f1_valid['Bukti_Clean'].isin(set_f2_bukti)]
-        gantung_di_f2 = f2_valid[~f2_valid['Bukti_Clean'].isin(set_f1_bukti)]
+        # Transaksi gantung awal berdasarkan nomor bukti
+        gantung_f1_raw = f1_valid[~f1_valid['Bukti_Clean'].isin(set_f2_bukti)]
+        gantung_f2_raw = f2_valid[~f2_valid['Bukti_Clean'].isin(set_f1_bukti)]
         
+        # Smart Cross-Match: Cari sisa gantung yang memiliki nominal sama persis (lintas debit/kredit)
+        matched_by_amount = []
+        matched_f2_indices = set()
+        
+        for idx1, row1 in gantung_f1_raw.iterrows():
+            val1 = row1['Debet'] if row1['Debet'] > 0 else row1['Kredit']
+            if val1 == 0:
+                continue
+            for idx2, row2 in gantung_f2_raw.iterrows():
+                if idx2 in matched_f2_indices:
+                    continue
+                val2 = row2['Debet_2'] if 'Debet_2' in row2 and row2['Debet_2'] > 0 else row2.get('Kredit_2', 0)
+                if val1 == val2:
+                    matched_f2_indices.add(idx2)
+                    break
+                    
+        gantung_di_f1 = gantung_f1_raw
+        gantung_di_f2 = gantung_f2_raw.drop(index=list(matched_f2_indices))
+
         merged = pd.merge(
             f1_valid, f2_valid,
             on='Bukti_Clean',
