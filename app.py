@@ -70,25 +70,17 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     # 2. ALGORITMA AUDIT & DETEKSI SALAH KAMAR (REKONSILIASI RAK)
     # ---------------------------------------------------------
     if mode_analisis != "Buku Besar vs Subledger":
-        # Logika Khusus Rekonsiliasi Antar Kantor (RAK) Berbasis Nominal & Tanggal
-        # Mencari transaksi dengan nominal yang sama persis (baik Debet vs Kredit maupun sebaliknya)
-        
-        # Buat kolom total nilai transaksi per baris untuk pencocokan lintas sisi
-        f1_valid['Nilai_Mutasi'] = f1_valid['Debet'] + f1_valid['Kredit']
-        f2_valid['Nilai_Mutasi'] = f2_valid['Debet_2'] + f2_valid['Kredit_2']
-        
-        # Identifikasi Transaksi Gantung & Salah Kamar
         set_f1_bukti = set(f1_valid['Bukti_Clean'])
         set_f2_bukti = set(f2_valid['Bukti_Clean'])
         
         gantung_di_f1 = f1_valid[~f1_valid['Bukti_Clean'].isin(set_f2_bukti)]
         gantung_di_f2 = f2_valid[~f2_valid['Bukti_Clean'].isin(set_f1_bukti)]
         
-        # Deteksi Salah Kamar: Nominal sama tapi posisi Debet/Kredit terbalik atau nomor bukti beda
+        # Perbaikan parameter suffixes di sini (pastikan tepat 2 nilai: '_F1', '_F2')
         merged = pd.merge(
             f1_valid, f2_valid,
             on='Bukti_Clean',
-            suffixes=('_F1', '_F2', '_F2') if 'Kredit_2' in f2_valid.columns else ('_F1', '_F2')
+            suffixes=('_F1', '_F2')
         )
         
         beda_tanggal = merged[merged['Tgl_Clean_F1'] != merged['Tgl_Clean_F2']] if 'Tgl_Clean_F1' in merged.columns else pd.DataFrame()
@@ -97,9 +89,8 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
             (merged['Debet'] != merged['Debet_2'])
         ] if 'Kredit_2' in merged.columns else pd.DataFrame()
         
-        pincang_f1 = pd.DataFrame() # Dinonaktifkan untuk RAK agar tidak keliru membaca baris buku besar parsial
+        pincang_f1 = pd.DataFrame()
     else:
-        # Logika Asli untuk Buku Besar vs Subledger
         set_f1 = set(f1_valid['Bukti_Clean'])
         set_f2 = set(f2_valid['Bukti_Clean'])
         gantung_di_f1 = f1_valid[~f1_valid['Bukti_Clean'].isin(set_f2)]
