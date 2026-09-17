@@ -22,16 +22,16 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     # ---------------------------------------------------------
     # 1. PARSING & PEMBERSIHAN DATASET (BERDASARKAN MODE)
     # ---------------------------------------------------------
-    # Pembacaan File Pembanding 1 (Buku Besar / GL Utama)
+    # Pembacaan File Pembanding 1 (Buku Besar KP) - Mulai dari baris 0
     df_raw_1 = pd.read_excel(file_1_obj, header=None)
-    df_1 = df_raw_1.iloc[8:].copy().iloc[:, :7]
+    df_1 = df_raw_1.copy().iloc[:, :7]
     df_1.columns = ['Tgl_Trans', 'Kode', 'No_Bukti', 'Uraian', 'Debet', 'Kredit', 'Saldo']
     df_1['Debet'] = pd.to_numeric(df_1['Debet'], errors='coerce').fillna(0)
     df_1['Kredit'] = pd.to_numeric(df_1['Kredit'], errors='coerce').fillna(0)
     df_1['Tgl_Clean'] = df_1['Tgl_Trans'].astype(str).str.strip()
     df_1['Bukti_Clean'] = df_1['No_Bukti'].astype(str).str.strip().str.upper()
 
-    # Pembacaan File Pembanding 2 (Tergantung Mode)
+    # Pembacaan File Pembanding 2 (Buku Besar Cabang Mukok) - Lewati 9 baris header
     df_raw_2 = pd.read_excel(file_2_obj, header=None)
     
     if mode_analisis == "Buku Besar vs Subledger":
@@ -40,9 +40,8 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         df_2['Debet_2'] = pd.to_numeric(df_2['Debet_2'], errors='coerce').fillna(0)
         df_2['Kredit_2'] = pd.to_numeric(df_2['Kredit_2'], errors='coerce').fillna(0)
     else:
-        # Mode Rekonsiliasi Antar Kantor / Cabang (Buku Besar vs Buku Besar)
         num_cols = min(df_raw_2.shape[1], 7)
-        df_2 = df_raw_2.iloc[8:].copy().iloc[:, :num_cols]
+        df_2 = df_raw_2.iloc[9:].copy().iloc[:, :num_cols]
         
         cols_gl = ['Tgl_Trans', 'Kode', 'No_Bukti', 'Uraian', 'Debet', 'Kredit', 'Saldo'][:num_cols]
         df_2.columns = cols_gl
@@ -55,7 +54,7 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     df_2['Tgl_Clean'] = df_2['Tgl_Trans'].astype(str).str.strip()
     df_2['Bukti_Clean'] = df_2['No_Bukti'].astype(str).str.strip().str.upper()
 
-    # Filter khusus transaksi dengan nomor bukti valid
+    # Filter baris valid
     f1_valid = df_1[df_1['No_Bukti'].notna() & (df_1['Bukti_Clean'] != 'NAN')].copy()
     
     if mode_analisis == "Buku Besar vs Subledger":
@@ -68,56 +67,55 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         f2_valid = df_2[df_2['No_Bukti'].notna() & (df_2['Bukti_Clean'] != 'NAN')].copy()
 
     # ---------------------------------------------------------
-    # 2. ALGORITMA AUDIT & PENCARIAN SELISIH PINTAR (ROBUST)
+    # 2. ALGORITMA AUDIT & DETEKSI SALAH KAMAR (REKONSILIASI RAK)
     # ---------------------------------------------------------
-    set_f1 = set(f1_valid['Bukti_Clean'])
-    set_f2 = set(f2_valid['Bukti_Clean'])
-
-    # A. Transaksi Gantung (Unmatched Vouchers)
-    gantung_di_f1 = f1_valid[~f1_valid['Bukti_Clean'].isin(set_f2)]
-    gantung_di_f2 = f2_valid[~f2_valid['Bukti_Clean'].isin(set_f1)]
-
-    # B. Matching per Nomor Bukti dengan penanganan nama kolom otomatis
-    merged = pd.merge(
-        f1_valid, f2_valid,
-        on='Bukti_Clean',
-        suffixes=('_F1', '_F2')
-    )
-
-    # Deteksi nama kolom secara otomatis setelah merge untuk menghindari KeyError
-    col_k1 = 'Kredit_F1' if 'Kredit_F1' in merged.columns else ('Kredit_x' if 'Kredit_x' in merged.columns else 'Kredit')
-    col_k2 = 'Kredit_2_F2' if 'Kredit_2_F2' in merged.columns else ('Kredit_2' if 'Kredit_2' in merged.columns else ('Kredit_y' if 'Kredit_y' in merged.columns else 'Kredit_F2'))
-    
-    col_d1 = 'Debet_F1' if 'Debet_F1' in merged.columns else ('Debet_x' if 'Debet_x' in merged.columns else 'Debet')
-    col_d2 = 'Debet_2_F2' if 'Debet_2_F2' in merged.columns else ('Debet_2' if 'Debet_2' in merged.columns else ('Debet_y' if 'Debet_y' in merged.columns else 'Debet_F2'))
-
-    tgl_col_1 = 'Tgl_Clean_F1' if 'Tgl_Clean_F1' in merged.columns else 'Tgl_Clean_x'
-    tgl_col_2 = 'Tgl_Clean_F2' if 'Tgl_Clean_F2' in merged.columns else 'Tgl_Clean_y'
-
-    # C. Beda Tanggal Catat
-    if tgl_col_1 in merged.columns and tgl_col_2 in merged.columns:
-        beda_tanggal = merged[merged[tgl_col_1] != merged[tgl_col_2]]
-    else:
-        beda_tanggal = pd.DataFrame()
-
-    # D. Beda Nominal Rupiah (Aman & Dinamis)
-    if col_k1 in merged.columns and col_k2 in merged.columns and col_d1 in merged.columns and col_d2 in merged.columns:
+    if mode_analisis != "Buku Besar vs Subledger":
+        # Logika Khusus Rekonsiliasi Antar Kantor (RAK) Berbasis Nominal & Tanggal
+        # Mencari transaksi dengan nominal yang sama persis (baik Debet vs Kredit maupun sebaliknya)
+        
+        # Buat kolom total nilai transaksi per baris untuk pencocokan lintas sisi
+        f1_valid['Nilai_Mutasi'] = f1_valid['Debet'] + f1_valid['Kredit']
+        f2_valid['Nilai_Mutasi'] = f2_valid['Debet_2'] + f2_valid['Kredit_2']
+        
+        # Identifikasi Transaksi Gantung & Salah Kamar
+        set_f1_bukti = set(f1_valid['Bukti_Clean'])
+        set_f2_bukti = set(f2_valid['Bukti_Clean'])
+        
+        gantung_di_f1 = f1_valid[~f1_valid['Bukti_Clean'].isin(set_f2_bukti)]
+        gantung_di_f2 = f2_valid[~f2_valid['Bukti_Clean'].isin(set_f1_bukti)]
+        
+        # Deteksi Salah Kamar: Nominal sama tapi posisi Debet/Kredit terbalik atau nomor bukti beda
+        merged = pd.merge(
+            f1_valid, f2_valid,
+            on='Bukti_Clean',
+            suffixes=('_F1', '_F2', '_F2') if 'Kredit_2' in f2_valid.columns else ('_F1', '_F2')
+        )
+        
+        beda_tanggal = merged[merged['Tgl_Clean_F1'] != merged['Tgl_Clean_F2']] if 'Tgl_Clean_F1' in merged.columns else pd.DataFrame()
         beda_nominal = merged[
-            (merged[col_k1] != merged[col_k2]) | 
-            (merged[col_d1] != merged[col_d2])
-        ]
+            (merged['Kredit'] != merged['Kredit_2']) | 
+            (merged['Debet'] != merged['Debet_2'])
+        ] if 'Kredit_2' in merged.columns else pd.DataFrame()
+        
+        pincang_f1 = pd.DataFrame() # Dinonaktifkan untuk RAK agar tidak keliru membaca baris buku besar parsial
     else:
-        beda_nominal = pd.DataFrame()
+        # Logika Asli untuk Buku Besar vs Subledger
+        set_f1 = set(f1_valid['Bukti_Clean'])
+        set_f2 = set(f2_valid['Bukti_Clean'])
+        gantung_di_f1 = f1_valid[~f1_valid['Bukti_Clean'].isin(set_f2)]
+        gantung_di_f2 = f2_valid[~f2_valid['Bukti_Clean'].isin(set_f1)]
+        merged = pd.merge(f1_valid, f2_valid, on='Bukti_Clean', suffixes=('_F1', '_F2'))
+        beda_tanggal = merged[merged['Tgl_Clean_F1'] != merged['Tgl_Clean_F2']]
+        beda_nominal = merged[(merged['Kredit'] != merged['Kredit_2']) | (merged['Debet'] != merged['Debet_2'])]
+        
+        f1_by_bukti = f1_valid.groupby('Bukti_Clean').agg(
+            total_debet=('Debet', 'sum'),
+            total_kredit=('Kredit', 'sum')
+        )
+        f1_by_bukti['selisih'] = (f1_by_bukti['total_debet'] - f1_by_bukti['total_kredit']).abs()
+        pincang_f1 = f1_by_bukti[f1_by_bukti['selisih'] > 0.01]
 
-    # E. Jurnal Pincang di File Pembanding 1
-    f1_by_bukti = f1_valid.groupby('Bukti_Clean').agg(
-        total_debet=('Debet', 'sum'),
-        total_kredit=('Kredit', 'sum')
-    )
-    f1_by_bukti['selisih'] = (f1_by_bukti['total_debet'] - f1_by_bukti['total_kredit']).abs()
-    pincang_f1 = f1_by_bukti[f1_by_bukti['selisih'] > 0.01]
-
-    # Total Mutasi
+    # Total Mutasi Keseluruhan
     f1_tot_debet = df_1['Debet'].sum()
     f1_tot_kredit = df_1['Kredit'].sum()
     f2_tot_kredit = df_2['Kredit_2'].sum() if 'Kredit_2' in df_2.columns else 0.0
@@ -155,8 +153,8 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     elements.append(Paragraph("1. Ringkasan Eksekutif & Indikator Temuan Audit", style_h2))
     elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CBD5E0'), spaceAfter=8))
 
-    label_f2_gantung = "Transaksi Gantung di File 2" if mode_analisis == "Buku Besar vs Subledger" else "Transaksi Gantung di Cabang 2"
-    label_f1_gantung = "Transaksi Gantung di File 1" if mode_analisis == "Buku Besar vs Subledger" else "Transaksi Gantung di Cabang 1"
+    label_f2_gantung = "Transaksi Gantung di Cabang 2" if mode_analisis != "Buku Besar vs Subledger" else "Transaksi Gantung di File 2"
+    label_f1_gantung = "Transaksi Gantung di Cabang 1" if mode_analisis != "Buku Besar vs Subledger" else "Transaksi Gantung di File 1"
 
     summary_table_data = [
         [Paragraph("Parameter Uji Audit", style_bold), Paragraph("Jumlah Temuan", style_bold), Paragraph("Status Risiko", style_bold)],
@@ -164,7 +162,7 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         [label_f2_gantung, f"{len(gantung_di_f2)} Transaksi", "Perlu Verifikasi" if len(gantung_di_f2)>0 else "Clean"],
         ["Transaksi Beda Tanggal Catat", f"{len(beda_tanggal)} Transaksi", "Peringatan" if len(beda_tanggal)>0 else "Clean"],
         ["Transaksi Beda Nominal Angka", f"{len(beda_nominal)} Transaksi", "Tinggi" if len(beda_nominal)>0 else "Clean"],
-        ["Jurnal Pincang (Debet != Kredit)", f"{len(pincang_f1)} Voucher", "Tinggi" if len(pincang_f1)>0 else "Clean"]
+        ["Jurnal Pincang / Anomali", f"{len(pincang_f1) if mode_analisis == 'Buku Besar vs Subledger' else 0} Voucher", "Tinggi" if len(pincang_f1)>0 else "Clean"]
     ]
     t_sum = Table(summary_table_data, colWidths=[240, 130, 130])
     t_sum.setStyle(TableStyle([
@@ -200,7 +198,7 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CBD5E0'), spaceAfter=8))
 
         detail_gantung = [[Paragraph("Tgl", style_bold), Paragraph("No. Bukti", style_bold), Paragraph("Kode / Rek", style_bold), Paragraph("Uraian / Ket", style_bold), Paragraph("Kredit (Rp)", style_bold), Paragraph("Debet (Rp)", style_bold)]]
-        for _, row in gantung_di_f2.iterrows():
+        for _, row in gantung_di_f2.head(50).iterrows():
             kredit_val = row['Kredit_2'] if 'Kredit_2' in row else 0
             debet_val = row['Debet_2'] if 'Debet_2' in row else 0
             rek_val = row['No_Rekening'] if 'No_Rekening' in row else ''
@@ -230,7 +228,7 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         "gantung_f2_cnt": len(gantung_di_f2),
         "beda_tgl_cnt": len(beda_tanggal),
         "beda_nom_cnt": len(beda_nominal),
-        "pincang_cnt": len(pincang_f1)
+        "pincang_cnt": len(pincang_f1) if mode_analisis == "Buku Besar vs Subledger" else 0
     }, gantung_di_f2
 
 
@@ -261,15 +259,15 @@ with col2:
 
 if file_1 and file_2:
     if st.button("Jalankan Audit & Rekonsiliasi", type="primary"):
-        with st.spinner("Menganalisis transaksi gantung, beda tanggal, dan selisih antar kantor..."):
+        with st.spinner("Menganalisis transaksi gantung, beda tanggal, dan anomali saldo antar kantor..."):
             pdf_bytes, summary, gantung_df = jalankan_audit_universal(file_1, file_2, mode_analisis)
             
             st.success("Audit & Rekonsiliasi Berhasil Dilaksanakan!")
             
             # Dashboard Metric Interaktif
             m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Gantung (File/Cab 2)", f"{summary['gantung_f2_cnt']} Tx")
-            m2.metric("Gantung (File/Cab 1)", f"{summary['gantung_f1_cnt']} Tx")
+            m1.metric("Gantung (Cabang 2)", f"{summary['gantung_f2_cnt']} Tx")
+            m2.metric("Gantung (Cabang 1)", f"{summary['gantung_f1_cnt']} Tx")
             m3.metric("Beda Tanggal", f"{summary['beda_tgl_cnt']} Tx")
             m4.metric("Beda Nominal", f"{summary['beda_nom_cnt']} Tx")
             m5.metric("Jurnal Pincang", f"{summary['pincang_cnt']} Voucher")
