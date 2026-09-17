@@ -22,7 +22,6 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     # ---------------------------------------------------------
     # 1. PARSING & PEMBERSIHAN DATASET (BERDASARKAN MODE)
     # ---------------------------------------------------------
-    # Pembacaan File Pembanding 1 (Buku Besar KP) - Mulai dari baris 0
     df_raw_1 = pd.read_excel(file_1_obj, header=None)
     df_1 = df_raw_1.copy().iloc[:, :7]
     df_1.columns = ['Tgl_Trans', 'Kode', 'No_Bukti', 'Uraian', 'Debet', 'Kredit', 'Saldo']
@@ -31,7 +30,6 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     df_1['Tgl_Clean'] = df_1['Tgl_Trans'].astype(str).str.strip()
     df_1['Bukti_Clean'] = df_1['No_Bukti'].astype(str).str.strip().str.upper()
 
-    # Pembacaan File Pembanding 2 (Buku Besar Cabang Mukok) - Lewati 9 baris header
     df_raw_2 = pd.read_excel(file_2_obj, header=None)
     
     if mode_analisis == "Buku Besar vs Subledger":
@@ -54,7 +52,6 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     df_2['Tgl_Clean'] = df_2['Tgl_Trans'].astype(str).str.strip()
     df_2['Bukti_Clean'] = df_2['No_Bukti'].astype(str).str.strip().str.upper()
 
-    # Filter baris valid
     f1_valid = df_1[df_1['No_Bukti'].notna() & (df_1['Bukti_Clean'] != 'NAN')].copy()
     
     if mode_analisis == "Buku Besar vs Subledger":
@@ -67,7 +64,7 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         f2_valid = df_2[df_2['No_Bukti'].notna() & (df_2['Bukti_Clean'] != 'NAN')].copy()
 
     # ---------------------------------------------------------
-    # 2. ALGORITMA AUDIT & DETEKSI SALAH KAMAR (REKONSILIASI RAK)
+    # 2. ALGORITMA AUDIT & PENGAMAN KOLOM DINAMIS
     # ---------------------------------------------------------
     if mode_analisis != "Buku Besar vs Subledger":
         set_f1_bukti = set(f1_valid['Bukti_Clean'])
@@ -84,13 +81,13 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         
         beda_tanggal = merged[merged['Tgl_Clean_F1'] != merged['Tgl_Clean_F2']] if 'Tgl_Clean_F1' in merged.columns else pd.DataFrame()
         
-        # Pengaman pengecekan kolom nominal hasil merge
-        col_k1 = 'Kredit_F1' if 'Kredit_F1' in merged.columns else 'Kredit'
-        col_k2 = 'Kredit_2_F2' if 'Kredit_2_F2' in merged.columns else ('Kredit_2' if 'Kredit_2' in merged.columns else 'Kredit_F2')
-        col_d1 = 'Debet_F1' if 'Debet_F1' in merged.columns else 'Debet'
-        col_d2 = 'Debet_2_F2' if 'Debet_2_F2' in merged.columns else ('Debet_2' if 'Debet_2' in merged.columns else 'Debet_F2')
+        # Deteksi nama kolom secara otomatis setelah merge (Aman dari KeyError)
+        col_k1 = next((c for c in ['Kredit_F1', 'Kredit_x', 'Kredit'] if c in merged.columns), None)
+        col_k2 = next((c for c in ['Kredit_2_F2', 'Kredit_2', 'Kredit_y', 'Kredit_F2'] if c in merged.columns), None)
+        col_d1 = next((c for c in ['Debet_F1', 'Debet_x', 'Debet'] if c in merged.columns), None)
+        col_d2 = next((c for c in ['Debet_2_F2', 'Debet_2', 'Debet_y', 'Debet_F2'] if c in merged.columns), None)
 
-        if col_k1 in merged.columns and col_k2 in merged.columns and col_d1 in merged.columns and col_d2 in merged.columns:
+        if col_k1 and col_k2 and col_d1 and col_d2:
             beda_nominal = merged[
                 (merged[col_k1] != merged[col_k2]) | 
                 (merged[col_d1] != merged[col_d2])
