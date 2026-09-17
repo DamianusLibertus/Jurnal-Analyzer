@@ -4,11 +4,11 @@
 # Application: Aplikasi Analisis Jurnal & Rekonsiliasi Audit
 # ==========================================================
 
-import streamlit as st
+import io
 import datetime
 import pandas as pd
 import numpy as np
-import io
+import streamlit as st
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -18,11 +18,11 @@ from reportlab.platypus import (
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 
-def jalankan_audit_universal(file_1_obj, file_2_obj):
+def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     # ---------------------------------------------------------
-    # 1. PARSING & PEMBERSIHAN DATASET (UNIVERSAL)
+    # 1. PARSING & PEMBERSIHAN DATASET (BERDASARKAN MODE)
     # ---------------------------------------------------------
-    # Pembacaan File Pembanding 1 (Buku Besar / GL)
+    # Pembacaan File Pembanding 1 (Buku Besar / GL Utama)
     df_raw_1 = pd.read_excel(file_1_obj, header=None)
     df_1 = df_raw_1.iloc[8:].copy().iloc[:, :7]
     df_1.columns = ['Tgl_Trans', 'Kode', 'No_Bukti', 'Uraian', 'Debet', 'Kredit', 'Saldo']
@@ -31,22 +31,38 @@ def jalankan_audit_universal(file_1_obj, file_2_obj):
     df_1['Tgl_Clean'] = df_1['Tgl_Trans'].astype(str).str.strip()
     df_1['Bukti_Clean'] = df_1['No_Bukti'].astype(str).str.strip().str.upper()
 
-    # Pembacaan File Pembanding 2 (Subledger / Rincian)
+    # Pembacaan File Pembanding 2 (Tergantung Mode)
     df_raw_2 = pd.read_excel(file_2_obj, header=None)
-    df_2 = df_raw_2.iloc[6:].copy().iloc[:, :8]
-    df_2.columns = ['No', 'No_Rekening', 'Nama_Nasabah', 'Tgl_Trans', 'No_Bukti', 'Kode_Trans', 'Kredit_2', 'Debet_2']
-    df_2['Kredit_2'] = pd.to_numeric(df_2['Kredit_2'], errors='coerce').fillna(0)
-    df_2['Debet_2'] = pd.to_numeric(df_2['Debet_2'], errors='coerce').fillna(0)
+    
+    if mode_analisis == "Buku Besar vs Subledger":
+        df_2 = df_raw_2.iloc[6:].copy().iloc[:, :8]
+        df_2.columns = ['No', 'No_Rekening', 'Nama_Nasabah', 'Tgl_Trans', 'No_Bukti', 'Kode_Trans', 'Kredit_2', 'Debet_2']
+        df_2['Debet_2'] = pd.to_numeric(df_2['Debet_2'], errors='coerce').fillna(0)
+        df_2['Kredit_2'] = pd.to_numeric(df_2['Kredit_2'], errors='coerce').fillna(0)
+    else:
+        # Mode Rekonsiliasi Antar Kantor / Cabang (Buku Besar vs Buku Besar)
+        df_2 = df_raw_2.iloc[8:].copy().iloc[:, :7]
+        df_2.columns = ['Tgl_Trans', 'Kode', 'No_Bukti', 'Uraian', 'Debet', 'Kredit', 'Saldo']
+        # Disamakan ke format pembanding 2 (Debet_2, Kredit_2)
+        df_2['Debet_2'] = pd.to_numeric(df_2['Debet'], errors='coerce').fillna(0)
+        df_2['Kredit_2'] = pd.to_numeric(df_2['Kredit'], errors='coerce').fillna(0)
+        df_2['No_Rekening'] = df_2['Kode']
+        df_2['Nama_Nasabah'] = df_2['Uraian']
+
     df_2['Tgl_Clean'] = df_2['Tgl_Trans'].astype(str).str.strip()
     df_2['Bukti_Clean'] = df_2['No_Bukti'].astype(str).str.strip().str.upper()
 
-    # Filter khusus transaksi dengan nomor bukti valid (mengabaikan NaN/Header)
+    # Filter khusus transaksi dengan nomor bukti valid
     f1_valid = df_1[df_1['No_Bukti'].notna() & (df_1['Bukti_Clean'] != 'NAN')].copy()
-    f2_valid = df_2[
-        df_2['No_Bukti'].notna() & 
-        (df_2['Bukti_Clean'] != 'NAN') & 
-        (df_2['No_Rekening'].astype(str) != 'No Rekening')
-    ].copy()
+    
+    if mode_analisis == "Buku Besar vs Subledger":
+        f2_valid = df_2[
+            df_2['No_Bukti'].notna() & 
+            (df_2['Bukti_Clean'] != 'NAN') & 
+            (df_2['No_Rekening'].astype(str) != 'No Rekening')
+        ].copy()
+    else:
+        f2_valid = df_2[df_2['No_Bukti'].notna() & (df_2['Bukti_Clean'] != 'NAN')].copy()
 
     # ---------------------------------------------------------
     # 2. ALGORITMA AUDIT & PENCARIAN SELISIH PINTAR
@@ -68,7 +84,7 @@ def jalankan_audit_universal(file_1_obj, file_2_obj):
     # C. Beda Tanggal Catat
     beda_tanggal = merged[merged['Tgl_Clean_F1'] != merged['Tgl_Clean_F2']]
 
-    # D. Beda Nominal Rupiah
+    # D. Beda Nominal Rupiah (Aman menggunakan Kredit vs Kredit_2 & Debet vs Debet_2)
     beda_nominal = merged[
         (merged['Kredit'] != merged['Kredit_2']) | 
         (merged['Debet'] != merged['Debet_2'])
@@ -111,6 +127,7 @@ def jalankan_audit_universal(file_1_obj, file_2_obj):
 
     # Header PDF
     elements.append(Paragraph("LAPORAN HASIL AUDIT REKONSILIASI & ANALISIS JURNAL", style_title))
+    elements.append(Paragraph(f"Mode Analisis: {mode_analisis}", style_sub))
     elements.append(Paragraph("Hak Cipta © 2026 Damianus Libertus. Seluruh Hak Cipta Dilindungi.", style_sub))
     elements.append(Paragraph(f"Tanggal Audit: {datetime.datetime.now().strftime('%d-%m-%Y %H:%M')} WIB", style_sub))
     elements.append(Spacer(1, 10))
@@ -119,13 +136,16 @@ def jalankan_audit_universal(file_1_obj, file_2_obj):
     elements.append(Paragraph("1. Ringkasan Eksekutif & Indikator Temuan Audit", style_h2))
     elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CBD5E0'), spaceAfter=8))
 
+    label_f2_gantung = "Transaksi Gantung di File 2" if mode_analisis == "Buku Besar vs Subledger" else "Transaksi Gantung di Cabang 2"
+    label_f1_gantung = "Transaksi Gantung di File 1" if mode_analisis == "Buku Besar vs Subledger" else "Transaksi Gantung di Cabang 1"
+
     summary_table_data = [
         [Paragraph("Parameter Uji Audit", style_bold), Paragraph("Jumlah Temuan", style_bold), Paragraph("Status Risiko", style_bold)],
-        ["Transaksi Gantung di File 1 (Tidak ada di File 2)", f"{len(gantung_di_f1)} Transaksi", "Perlu Verifikasi" if len(gantung_di_f1)>0 else "Clean"],
-        ["Transaksi Gantung di File 2 (Tidak ada di File 1)", f"{len(gantung_di_f2)} Transaksi", "Perlu Verifikasi" if len(gantung_di_f2)>0 else "Clean"],
-        ["Transaksi Beda Tanggal Catat (File 1 vs File 2)", f"{len(beda_tanggal)} Transaksi", "Peringatan" if len(beda_tanggal)>0 else "Clean"],
+        [label_f1_gantung, f"{len(gantung_di_f1)} Transaksi", "Perlu Verifikasi" if len(gantung_di_f1)>0 else "Clean"],
+        [label_f2_gantung, f"{len(gantung_di_f2)} Transaksi", "Perlu Verifikasi" if len(gantung_di_f2)>0 else "Clean"],
+        ["Transaksi Beda Tanggal Catat", f"{len(beda_tanggal)} Transaksi", "Peringatan" if len(beda_tanggal)>0 else "Clean"],
         ["Transaksi Beda Nominal Angka", f"{len(beda_nominal)} Transaksi", "Tinggi" if len(beda_nominal)>0 else "Clean"],
-        ["Jurnal Pincang di File 1 (Debet != Kredit)", f"{len(pincang_f1)} Voucher", "Tinggi" if len(pincang_f1)>0 else "Clean"]
+        ["Jurnal Pincang (Debet != Kredit)", f"{len(pincang_f1)} Voucher", "Tinggi" if len(pincang_f1)>0 else "Clean"]
     ]
     t_sum = Table(summary_table_data, colWidths=[240, 130, 130])
     t_sum.setStyle(TableStyle([
@@ -137,11 +157,11 @@ def jalankan_audit_universal(file_1_obj, file_2_obj):
     elements.append(Spacer(1, 12))
 
     # Rekonsiliasi Nominal Mutasi
-    elements.append(Paragraph("2. Rekonsiliasi Total Nominal Mutasi (File 1 vs File 2)", style_h2))
+    elements.append(Paragraph("2. Rekonsiliasi Total Nominal Mutasi Antar Kantor / Dokumen", style_h2))
     elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CBD5E0'), spaceAfter=8))
 
     rekon_data = [
-        [Paragraph("Sisi Mutasi", style_bold), Paragraph("File Pembanding 1 (Rp)", style_bold), Paragraph("File Pembanding 2 (Rp)", style_bold), Paragraph("Selisih (Rp)", style_bold)],
+        [Paragraph("Sisi Mutasi", style_bold), Paragraph("Dokumen 1 (Rp)", style_bold), Paragraph("Dokumen 2 (Rp)", style_bold), Paragraph("Selisih (Rp)", style_bold)],
         ["Mutasi Kredit / Masuk", f"{f1_tot_kredit:,.2f}", f"{f2_tot_kredit:,.2f}", f"{selisih_kredit:,.2f}"],
         ["Mutasi Debet / Keluar", f"{f1_tot_debet:,.2f}", f"{f2_tot_debet:,.2f}", f"{selisih_debet:,.2f}"]
     ]
@@ -157,10 +177,10 @@ def jalankan_audit_universal(file_1_obj, file_2_obj):
 
     # Detail Transaksi Gantung
     if len(gantung_di_f2) > 0:
-        elements.append(Paragraph("3. Rincian Transaksi Gantung (Ada di File Pembanding 2 Tapi Belum Masuk File 1)", style_h2))
+        elements.append(Paragraph("3. Rincian Transaksi Gantung / Belum Match", style_h2))
         elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CBD5E0'), spaceAfter=8))
 
-        detail_gantung = [[Paragraph("Tgl", style_bold), Paragraph("No. Bukti", style_bold), Paragraph("No Rek/ID", style_bold), Paragraph("Nama / Ket", style_bold), Paragraph("Kredit (Rp)", style_bold), Paragraph("Debet (Rp)", style_bold)]]
+        detail_gantung = [[Paragraph("Tgl", style_bold), Paragraph("No. Bukti", style_bold), Paragraph("Kode / Rek", style_bold), Paragraph("Uraian / Ket", style_bold), Paragraph("Kredit (Rp)", style_bold), Paragraph("Debet (Rp)", style_bold)]]
         for _, row in gantung_di_f2.iterrows():
             detail_gantung.append([
                 Paragraph(str(row['Tgl_Trans']), style_cell),
@@ -198,29 +218,40 @@ st.set_page_config(page_title="Audit Rekonsiliasi & Analisis Jurnal", layout="wi
 st.title("Aplikasi Analisis Jurnal & Rekonsiliasi Audit")
 st.caption("Hak Cipta © 2026 Damianus Libertus. Seluruh Hak Cipta Dilindungi.")
 
+# Pilihan Mode Analisis
+mode_analisis = st.radio(
+    "Pilih Mode Analisis & Pencocokan Transaksi:",
+    ["Buku Besar vs Subledger", "Buku Besar vs Buku Besar Antar Kantor / Cabang"],
+    horizontal=True
+)
+
+st.divider()
+
 col1, col2 = st.columns(2)
 with col1:
-    file_1 = st.file_uploader("Upload File Utama / Pembanding 1 (Excel)", type=["xlsx", "xls"])
+    label_file_1 = "Upload File Buku Besar (GL) Utama (Excel)" if mode_analisis == "Buku Besar vs Buku Besar Antar Kantor / Cabang" else "Upload File Utama / Pembanding 1 (Excel)"
+    file_1 = st.file_uploader(label_file_1, type=["xlsx", "xls"], key="f1")
 with col2:
-    file_2 = st.file_uploader("Upload File Pendukung / Pembanding 2 (Excel)", type=["xlsx", "xls"])
+    label_file_2 = "Upload File Buku Besar (GL) Kantor / Cabang Pembanding (Excel)" if mode_analisis == "Buku Besar vs Buku Besar Antar Kantor / Cabang" else "Upload File Pendukung / Pembanding 2 (Excel)"
+    file_2 = st.file_uploader(label_file_2, type=["xlsx", "xls"], key="f2")
 
 if file_1 and file_2:
     if st.button("Jalankan Audit & Rekonsiliasi", type="primary"):
-        with st.spinner("Menganalisis transaksi gantung, beda tanggal, dan selisih..."):
-            pdf_bytes, summary, gantung_df = jalankan_audit_universal(file_1, file_2)
+        with st.spinner("Menganalisis transaksi gantung, beda tanggal, dan selisih antar kantor..."):
+            pdf_bytes, summary, gantung_df = jalankan_audit_universal(file_1, file_2, mode_analisis)
             
-            st.success("Audit Selesai Dilaksanakan!")
+            st.success("Audit & Rekonsiliasi Berhasil Dilaksanakan!")
             
             # Dashboard Metric Interaktif
             m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Gantung (File 2)", f"{summary['gantung_f2_cnt']} Tx")
-            m2.metric("Gantung (File 1)", f"{summary['gantung_f1_cnt']} Tx")
+            m1.metric("Gantung (File/Cab 2)", f"{summary['gantung_f2_cnt']} Tx")
+            m2.metric("Gantung (File/Cab 1)", f"{summary['gantung_f1_cnt']} Tx")
             m3.metric("Beda Tanggal", f"{summary['beda_tgl_cnt']} Tx")
             m4.metric("Beda Nominal", f"{summary['beda_nom_cnt']} Tx")
             m5.metric("Jurnal Pincang", f"{summary['pincang_cnt']} Voucher")
 
             if summary['gantung_f2_cnt'] > 0:
-                st.subheader("Detail Transaksi Gantung di File Pembanding 2")
+                st.subheader("Rincian Transaksi Gantung / Belum Match")
                 st.dataframe(gantung_df[['Tgl_Trans', 'No_Bukti', 'No_Rekening', 'Nama_Nasabah', 'Kredit_2', 'Debet_2']])
 
             st.download_button(
@@ -230,4 +261,4 @@ if file_1 and file_2:
                 mime="application/pdf"
             )
 else:
-    st.info("Silakan unggah File Pembanding 1 dan File Pembanding 2 (Excel) untuk memulai analisis.")
+    st.info("Silakan pilih mode analisis dan unggah kedua file Excel yang diperlukan untuk memulai.")
