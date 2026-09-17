@@ -68,7 +68,7 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
         f2_valid = df_2[df_2['No_Bukti'].notna() & (df_2['Bukti_Clean'] != 'NAN')].copy()
 
     # ---------------------------------------------------------
-    # 2. ALGORITMA AUDIT & PENCARIAN SELISIH PINTAR
+    # 2. ALGORITMA AUDIT & PENCARIAN SELISIH PINTAR (ROBUST)
     # ---------------------------------------------------------
     set_f1 = set(f1_valid['Bukti_Clean'])
     set_f2 = set(f2_valid['Bukti_Clean'])
@@ -77,26 +77,37 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     gantung_di_f1 = f1_valid[~f1_valid['Bukti_Clean'].isin(set_f2)]
     gantung_di_f2 = f2_valid[~f2_valid['Bukti_Clean'].isin(set_f1)]
 
-    # B. Matching per Nomor Bukti
+    # B. Matching per Nomor Bukti dengan penanganan nama kolom otomatis
     merged = pd.merge(
         f1_valid, f2_valid,
         on='Bukti_Clean',
         suffixes=('_F1', '_F2')
     )
 
+    # Deteksi nama kolom secara otomatis setelah merge untuk menghindari KeyError
+    col_k1 = 'Kredit_F1' if 'Kredit_F1' in merged.columns else ('Kredit_x' if 'Kredit_x' in merged.columns else 'Kredit')
+    col_k2 = 'Kredit_2_F2' if 'Kredit_2_F2' in merged.columns else ('Kredit_2' if 'Kredit_2' in merged.columns else ('Kredit_y' if 'Kredit_y' in merged.columns else 'Kredit_F2'))
+    
+    col_d1 = 'Debet_F1' if 'Debet_F1' in merged.columns else ('Debet_x' if 'Debet_x' in merged.columns else 'Debet')
+    col_d2 = 'Debet_2_F2' if 'Debet_2_F2' in merged.columns else ('Debet_2' if 'Debet_2' in merged.columns else ('Debet_y' if 'Debet_y' in merged.columns else 'Debet_F2'))
+
+    tgl_col_1 = 'Tgl_Clean_F1' if 'Tgl_Clean_F1' in merged.columns else 'Tgl_Clean_x'
+    tgl_col_2 = 'Tgl_Clean_F2' if 'Tgl_Clean_F2' in merged.columns else 'Tgl_Clean_y'
+
     # C. Beda Tanggal Catat
-    beda_tanggal = merged[merged['Tgl_Clean_F1'] != merged['Tgl_Clean_F2']]
+    if tgl_col_1 in merged.columns and tgl_col_2 in merged.columns:
+        beda_tanggal = merged[merged[tgl_col_1] != merged[tgl_col_2]]
+    else:
+        beda_tanggal = pd.DataFrame()
 
-    # D. Beda Nominal Rupiah (Menggunakan kolom hasil merge _F1 dan _2)
-    col_k1 = 'Kredit_F1' if 'Kredit_F1' in merged.columns else 'Kredit'
-    col_k2 = 'Kredit_2_F2' if 'Kredit_2_F2' in merged.columns else ('Kredit_2' if 'Kredit_2' in merged.columns else 'Kredit_F2')
-    col_d1 = 'Debet_F1' if 'Debet_F1' in merged.columns else 'Debet'
-    col_d2 = 'Debet_2_F2' if 'Debet_2_F2' in merged.columns else ('Debet_2' if 'Debet_2' in merged.columns else 'Debet_F2')
-
-    beda_nominal = merged[
-        (merged[col_k1] != merged[col_k2]) | 
-        (merged[col_d1] != merged[col_d2])
-    ]
+    # D. Beda Nominal Rupiah (Aman & Dinamis)
+    if col_k1 in merged.columns and col_k2 in merged.columns and col_d1 in merged.columns and col_d2 in merged.columns:
+        beda_nominal = merged[
+            (merged[col_k1] != merged[col_k2]) | 
+            (merged[col_d1] != merged[col_d2])
+        ]
+    else:
+        beda_nominal = pd.DataFrame()
 
     # E. Jurnal Pincang di File Pembanding 1
     f1_by_bukti = f1_valid.groupby('Bukti_Clean').agg(
@@ -109,8 +120,8 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
     # Total Mutasi
     f1_tot_debet = df_1['Debet'].sum()
     f1_tot_kredit = df_1['Kredit'].sum()
-    f2_tot_kredit = df_2['Kredit_2'].sum()
-    f2_tot_debet = df_2['Debet_2'].sum()
+    f2_tot_kredit = df_2['Kredit_2'].sum() if 'Kredit_2' in df_2.columns else 0.0
+    f2_tot_debet = df_2['Debet_2'].sum() if 'Debet_2' in df_2.columns else 0.0
 
     selisih_kredit = f1_tot_kredit - f2_tot_kredit
     selisih_debet = f1_tot_debet - f2_tot_debet
@@ -190,13 +201,18 @@ def jalankan_audit_universal(file_1_obj, file_2_obj, mode_analisis):
 
         detail_gantung = [[Paragraph("Tgl", style_bold), Paragraph("No. Bukti", style_bold), Paragraph("Kode / Rek", style_bold), Paragraph("Uraian / Ket", style_bold), Paragraph("Kredit (Rp)", style_bold), Paragraph("Debet (Rp)", style_bold)]]
         for _, row in gantung_di_f2.iterrows():
+            kredit_val = row['Kredit_2'] if 'Kredit_2' in row else 0
+            debet_val = row['Debet_2'] if 'Debet_2' in row else 0
+            rek_val = row['No_Rekening'] if 'No_Rekening' in row else ''
+            nama_val = str(row['Nama_Nasabah'])[:20] if 'Nama_Nasabah' in row else ''
+            
             detail_gantung.append([
                 Paragraph(str(row['Tgl_Trans']), style_cell),
                 Paragraph(str(row['No_Bukti']), style_cell),
-                Paragraph(str(row['No_Rekening']), style_cell),
-                Paragraph(str(row['Nama_Nasabah'])[:20], style_cell),
-                f"{row['Kredit_2']:,.0f}",
-                f"{row['Debet_2']:,.0f}"
+                Paragraph(str(rek_val), style_cell),
+                Paragraph(nama_val, style_cell),
+                f"{kredit_val:,.0f}",
+                f"{debet_val:,.0f}"
             ])
         t_gantung = Table(detail_gantung, colWidths=[65, 80, 95, 110, 75, 75])
         t_gantung.setStyle(TableStyle([
@@ -260,7 +276,8 @@ if file_1 and file_2:
 
             if summary['gantung_f2_cnt'] > 0:
                 st.subheader("Rincian Transaksi Gantung / Belum Match")
-                st.dataframe(gantung_df[['Tgl_Trans', 'No_Bukti', 'No_Rekening', 'Nama_Nasabah', 'Kredit_2', 'Debet_2']])
+                available_cols = [col for col in ['Tgl_Trans', 'No_Bukti', 'No_Rekening', 'Nama_Nasabah', 'Kredit_2', 'Debet_2'] if col in gantung_df.columns]
+                st.dataframe(gantung_df[available_cols])
 
             st.download_button(
                 label="Download Laporan Audit Resmi (PDF)",
